@@ -33,6 +33,12 @@ async def async_setup_entry(
         AtherVinSensor(coordinator),
         AtherBikeTypeSensor(coordinator),
         AtherOtaStatusSensor(coordinator),
+        AtherLastSyncedSensor(coordinator),
+        AtherModeRangeSensor(coordinator, "Eco", "EcoModeRange"),
+        AtherModeRangeSensor(coordinator, "Ride", "RideModeRange"),
+        AtherModeRangeSensor(coordinator, "Sport", "SportModeRange"),
+        AtherModeRangeSensor(coordinator, "Warp", "WarpModeRange"),
+        AtherModeRangeSensor(coordinator, "SmartEco", "SmartEcoModeRange"),
     ]
 
     async_add_entities(entities)
@@ -202,3 +208,56 @@ class AtherOtaStatusSensor(AtherSensor):
     def native_value(self) -> str | None:
         """Return the state of the sensor."""
         return self.coordinator.get_data("otaStatus")
+
+
+class AtherLastSyncedSensor(AtherSensor):
+    """Representation of the Last Synced Time sensor."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_name = "Last Synced"
+    _attr_icon = "mdi:clock-check"
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_last_synced"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the state of the sensor."""
+        ts_ms = self.coordinator.get_data("lastSyncedTime")
+        if ts_ms:
+            try:
+                # Convert ms timestamp to ISO string for HA
+                from datetime import datetime, timezone
+
+                return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+            except Exception:
+                pass
+        return None
+
+
+class AtherModeRangeSensor(AtherSensor):
+    """Representation of the Range for a specific mode."""
+
+    _attr_device_class = SensorDeviceClass.DISTANCE
+    _attr_native_unit_of_measurement = UnitOfLength.KILOMETERS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, mode_name: str, mode_key: str) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._mode_key = mode_key
+        self._attr_name = f"Range ({mode_name})"
+        self._id_suffix = mode_name.lower().replace(" ", "_")
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_range_{self._id_suffix}"
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the state of the sensor."""
+        ranges = self.coordinator.get_data("modeRange")
+        if ranges and isinstance(ranges, dict):
+            return ranges.get(self._mode_key)
+        return None

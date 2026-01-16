@@ -10,7 +10,7 @@ CONF_FIREBASE_API_KEY = "firebase_api_key"
 WS_URL = "wss://ather-production-mu.firebaseio.com/.ws?v=5"
 
 # Platforms
-PLATFORMS = ["sensor", "device_tracker", "binary_sensor"]
+PLATFORMS = ["sensor", "device_tracker", "binary_sensor", "button", "switch"]
 
 CONF_MOBILE_NO = "mobile_no"
 CONF_OTP = "otp"

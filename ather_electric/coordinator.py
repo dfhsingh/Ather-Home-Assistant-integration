@@ -12,7 +12,7 @@ import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import WS_URL
+from .const import WS_URL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,15 +34,58 @@ class AtherCoordinator:
         self.firebase_token = firebase_token
         self.api_key = api_key
         self.device_name = device_name
+        self.name = device_name
         self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
         self.data: Dict[str, Any] = {}
         self._listeners: list = []
         self.session = async_get_clientsession(hass)
         self._shutdown = False
+        self.shutdown_safe_mode = True  # Default to Safe Mode ON
+        self.last_update_success = False  # For CoordinatorEntity compatibility
 
         # Token Management
         self.refresh_token: Optional[str] = None
         self.token_file = hass.config.path(".ather_tokens.json")
+
+    async def _send_put_request(self, path: str, data: Dict[str, Any]) -> bool:
+        """Send a PUT request to Firebase."""
+        id_token = await self.get_id_token()
+        if not id_token:
+            _LOGGER.error("Cannot send PUT request: No ID token")
+            return False
+
+        url = f"https://ather-production-mu.firebaseio.com/{path}.json?auth={id_token}"
+        try:
+            async with self.session.put(url, json=data) as resp:
+                if resp.status == 200:
+                    _LOGGER.info("PUT request to %s successful", path)
+                    return True
+                else:
+                    text = await resp.text()
+                    _LOGGER.error("PUT request to %s failed: %s", path, text)
+                    return False
+        except Exception as err:
+            _LOGGER.error("Error sending PUT request: %s", err)
+            return False
+
+    async def async_ping_scooter(self) -> None:
+        """Send ping_my_scooter command."""
+        path = f"scooters/{self.scooter_id}/ping_my_scooter"
+        data = {"request_id": "home_assistant_ping", "state": 1}
+        await self._send_put_request(path, data)
+
+    async def async_remote_charging(self, action: str) -> None:
+        """Send remote_charging command (start/stop)."""
+        path = f"scooters/{self.scooter_id}/remote_charging"
+        data = {"action": action}
+        await self._send_put_request(path, data)
+
+    async def async_remote_shutdown(self) -> None:
+        """Send remote_shutdown command."""
+        path = f"scooters/{self.scooter_id}/remote_shutdown"
+        # Based on logic: state 1 triggers shutdown
+        data = {"state": 1}
+        await self._send_put_request(path, data)
 
     def _load_tokens(self):
         """Load refresh token from file."""
@@ -62,7 +105,7 @@ class AtherCoordinator:
         except Exception as err:
             _LOGGER.error("Failed to save tokens: %s", err)
 
-    def async_add_listener(self, update_callback):
+    def async_add_listener(self, update_callback, context=None):
         """Listen for data updates."""
         self._listeners.append(update_callback)
 
@@ -158,6 +201,8 @@ class AtherCoordinator:
                 async with self.session.ws_connect(WS_URL) as ws:
                     self.ws = ws
                     _LOGGER.info("Connected to Ather WebSocket")
+                    self.last_update_success = True
+                    self._notify_listeners()
 
                     # Authenticate
                     auth_payload = {
@@ -176,6 +221,24 @@ class AtherCoordinator:
                     }
                     await ws.send_json(sub_payload)
 
+                    # Subscribe to 'app' (for mode ranges)
+                    path_app = f"/scooters/{self.scooter_id}/app"
+                    _LOGGER.info(f"Subscribing to {path_app}")
+                    sub_payload_app = {
+                        "t": "d",
+                        "d": {"r": 3, "a": "q", "b": {"p": path_app, "h": ""}},
+                    }
+                    await ws.send_json(sub_payload_app)
+
+                    # Subscribe to 'lastSyncedTime'
+                    path_sync = f"/scooters/{self.scooter_id}/lastSyncedTime"
+                    _LOGGER.info(f"Subscribing to {path_sync}")
+                    sub_payload_sync = {
+                        "t": "d",
+                        "d": {"r": 4, "a": "q", "b": {"p": path_sync, "h": ""}},
+                    }
+                    await ws.send_json(sub_payload_sync)
+
                     async for msg in ws:
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             await self._handle_message(msg.data)
@@ -184,9 +247,13 @@ class AtherCoordinator:
 
             except aiohttp.ClientError as err:
                 _LOGGER.error("WebSocket connection error: %s", err)
+                self.last_update_success = False
+                self._notify_listeners()
                 await asyncio.sleep(10)
             except Exception as err:
                 _LOGGER.error("Unexpected error in WebSocket loop: %s", err)
+                self.last_update_success = False
+                self._notify_listeners()
                 await asyncio.sleep(10)
 
     async def _handle_message(self, message: str):
@@ -305,6 +372,29 @@ class AtherCoordinator:
                         self.data["charging"][field] = value
 
         # Also maintain a raw dump if needed, or just update dict
+
+        # Handle 'app' data for mode ranges
+        app_data = data.get("app", {})
+        if app_data and "modeRange" in app_data:
+            self.data["modeRange"] = app_data["modeRange"]
+
+        if "lastSyncedTime" in data:
+            self.data["lastSyncedTime"] = data["lastSyncedTime"]
+
+        # Flattened patch updates handling extended
+        for key, value in data.items():
+            if "/" in key:
+                parts = key.split("/")
+                if len(parts) == 2:
+                    category, field = parts
+
+                    if category == "app" and field == "modeRange":
+                        self.data["modeRange"] = value
+
+        # Check nested lastSyncedTime (if it comes under root or bike)
+        # Based on logs, it was /scooters/s_421436/lastSyncedTime -> Value: ...
+        # So it might come as a direct update.
+
         self.data.update(data)
 
     def _update_gps(self, gps_data):
