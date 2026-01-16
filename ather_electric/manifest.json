@@ -1,0 +1,12 @@
+{
+  "domain": "ather_electric",
+  "name": "Ather Electric",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/dfhsingh/ather_electric",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/dfhsingh/ather_electric/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}
