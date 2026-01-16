@@ -12,6 +12,7 @@ import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .api import AtherAPI
 from .const import WS_URL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ class AtherCoordinator:
         self.data: Dict[str, Any] = {}
         self._listeners: list = []
         self.session = async_get_clientsession(hass)
+        self.api = AtherAPI(self.session)
         self._shutdown = False
         self.shutdown_safe_mode = True  # Default to Safe Mode ON
         self.last_update_success = False  # For CoordinatorEntity compatibility
@@ -46,27 +48,6 @@ class AtherCoordinator:
         # Token Management
         self.refresh_token: Optional[str] = None
         self.token_file = hass.config.path(".ather_tokens.json")
-
-    async def _send_put_request(self, path: str, data: Dict[str, Any]) -> bool:
-        """Send a PUT request to Firebase."""
-        id_token = await self.get_id_token()
-        if not id_token:
-            _LOGGER.error("Cannot send PUT request: No ID token")
-            return False
-
-        url = f"https://ather-production-mu.firebaseio.com/{path}.json?auth={id_token}"
-        try:
-            async with self.session.put(url, json=data) as resp:
-                if resp.status == 200:
-                    _LOGGER.info("PUT request to %s successful", path)
-                    return True
-                else:
-                    text = await resp.text()
-                    _LOGGER.error("PUT request to %s failed: %s", path, text)
-                    return False
-        except Exception as err:
-            _LOGGER.error("Error sending PUT request: %s", err)
-            return False
 
     async def async_ping_scooter(self) -> None:
         """Send ping_my_scooter command."""
@@ -86,6 +67,14 @@ class AtherCoordinator:
         # Based on logic: state 1 triggers shutdown
         data = {"state": 1}
         await self._send_put_request(path, data)
+
+    async def _send_put_request(self, path: str, data: Dict[str, Any]) -> bool:
+        """Delegate PUT request to API."""
+        id_token = await self.get_id_token()
+        if not id_token:
+            _LOGGER.error("Cannot send PUT request: No ID token")
+            return False
+        return await self.api.send_put_request(path, data, id_token)
 
     def _load_tokens(self):
         """Load refresh token from file."""
@@ -131,57 +120,32 @@ class AtherCoordinator:
         return await self._exchange_custom_token()
 
     async def _refresh_id_token(self) -> Optional[str]:
-        """Get new ID token using refresh token."""
-        url = f"https://securetoken.googleapis.com/v1/token?key={self.api_key}"
-        payload = {
-            "grant_type": "refresh_token",
-            "refresh_token": self.refresh_token,
-        }
-
-        try:
-            async with self.session.post(url, json=payload) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    new_refresh = data.get("refresh_token")
-                    if new_refresh:
-                        self.refresh_token = new_refresh
-                        await self.hass.async_add_executor_job(self._save_tokens)
-                    return data.get("id_token")
-                else:
-                    text = await resp.text()
-                    _LOGGER.warning("Token refresh failed: %s", text)
-                    return None
-        except Exception as err:
-            _LOGGER.error("Error refreshing token: %s", err)
+        """Get new ID token using refresh token via API."""
+        if not self.refresh_token:
             return None
+
+        data = await self.api.refresh_id_token(self.refresh_token, self.api_key)
+        if data:
+            new_refresh = data.get("refresh_token")
+            if new_refresh:
+                self.refresh_token = new_refresh
+                await self.hass.async_add_executor_job(self._save_tokens)
+            return data.get("id_token")
+        return None
 
     async def _exchange_custom_token(self) -> Optional[str]:
-        """Exchanges custom token for ID token and Refresh token."""
-        url = f"https://www.googleapis.com/identitytoolkit/v3/relyingparty/verifyCustomToken?key={self.api_key}"
-        payload = {"token": self.firebase_token, "returnSecureToken": True}
+        """Exchanges custom token for ID token via API."""
+        data = await self.api.exchange_custom_token(self.firebase_token, self.api_key)
+        if data:
+            id_token = data.get("idToken")
+            refresh_token = data.get("refreshToken")
 
-        try:
-            async with self.session.post(url, json=payload) as resp:
-                if resp.status == 200:
-                    json_resp = await resp.json()
-                    id_token = json_resp.get("idToken")
-                    refresh_token = json_resp.get("refreshToken")
+            if refresh_token:
+                self.refresh_token = refresh_token
+                await self.hass.async_add_executor_job(self._save_tokens)
 
-                    if refresh_token:
-                        self.refresh_token = refresh_token
-                        await self.hass.async_add_executor_job(self._save_tokens)
-
-                    return id_token
-                else:
-                    text = await resp.text()
-                    _LOGGER.error(
-                        "Custom token exchange failed: %s. The configured token may be expired.",
-                        text,
-                    )
-                    return None
-        except Exception as err:
-            _LOGGER.error("Error exchanging custom token: %s", err)
-            return None
+            return id_token
+        return None
 
     async def connect(self):
         """Connect to WebSocket and listen for messages."""
@@ -314,6 +278,8 @@ class AtherCoordinator:
                 self.data["otaStatus"] = bike["otaStatus"]
             if "GPSLocation" in bike:
                 self._update_gps(bike["GPSLocation"])
+            if "TheftTowMovementState" in bike:
+                self.data["TheftTowMovementState"] = bike["TheftTowMovementState"]
 
         # Check root level (sometimes updates come as flattened patches)
         if "batterySOC" in data:
@@ -362,6 +328,8 @@ class AtherCoordinator:
                             self.data["bikeType"] = value
                         elif field == "otaStatus":
                             self.data["otaStatus"] = value
+                        elif field == "TheftTowMovementState":
+                            self.data["TheftTowMovementState"] = value
 
                     # Handle charging/* updates (update the nested dict)
                     elif category == "charging":

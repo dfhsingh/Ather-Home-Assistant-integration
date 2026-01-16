@@ -39,6 +39,7 @@ async def async_setup_entry(
         AtherModeRangeSensor(coordinator, "Sport", "SportModeRange"),
         AtherModeRangeSensor(coordinator, "Warp", "WarpModeRange"),
         AtherModeRangeSensor(coordinator, "SmartEco", "SmartEcoModeRange"),
+        AtherTheftMovementSensor(coordinator),
     ]
 
     async_add_entities(entities)
@@ -261,3 +262,19 @@ class AtherModeRangeSensor(AtherSensor):
         if ranges and isinstance(ranges, dict):
             return ranges.get(self._mode_key)
         return None
+
+
+class AtherTheftMovementSensor(AtherSensor):
+    """Representation of the Theft Movement sensor."""
+
+    _attr_name = "Theft Movement State"
+    _attr_icon = "mdi:shield-alert"
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_theft_movement"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the state of the sensor."""
+        return self.coordinator.get_data("TheftTowMovementState")
