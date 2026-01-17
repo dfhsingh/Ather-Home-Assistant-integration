@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Any, Dict, Optional
 
 import aiohttp
@@ -52,23 +53,91 @@ class AtherCoordinator:
 
     async def async_ping_scooter(self) -> None:
         """Send ping_my_scooter command."""
+        # Validation: Allow only if Key is OFF (0)
+        key_state = self.data.get("keySwitch")
+        if key_state == 1:
+            _LOGGER.warning("Ping blocked: Scooter key is ON")
+            return
+
         path = f"scooters/{self.scooter_id}/ping_my_scooter"
-        data = {"request_id": "home_assistant_ping", "state": 1}
+        ts = int(time.time() * 1000)
+        data = {
+            "request_id": f"HA_{ts}",
+            "state": 1,
+            "timestamp": ts,
+            "error": "0",
+        }
         await self._send_put_request(path, data)
 
     async def async_remote_charging(self, action: str) -> None:
         """Send remote_charging command (start/stop)."""
+        # Validation
+        charging_data = self.data.get("charging", {})
+        status = charging_data.get("chargingStatus")
+        heartbeat = charging_data.get("chargingHeartBeat")
+
+        if action == "start":
+            # START: Must NOT be charging AND (Heartbeat ON OR Plugged In)
+            # Assuming 'Heartbeat' == 'On' implies plugged in/ready
+            if status == "Charging":
+                _LOGGER.warning("Remote Start blocked: Already Charging")
+                return
+            if heartbeat != "On":
+                _LOGGER.warning("Remote Start blocked: Charger not connected/ready")
+                return
+        else:
+            # STOP: Must be charging
+            if status != "Charging":
+                _LOGGER.warning("Remote Stop blocked: Not currently charging")
+                return
+
         path = f"scooters/{self.scooter_id}/remote_charging"
-        # API requires integer 1 for start, 0 for stop
-        payload_val = 1 if action == "start" else 0
-        data = {"action": payload_val}
+        ts = int(time.time() * 1000)
+
+        # Based on logs and debugging:
+        # Start: action="start", state=0 (Deduced from Ping/Shutdown patterns)
+        # Stop: action="stop", state=3 (Observed in logs)
+        if action == "start":
+            data = {
+                "action": "start",
+                "state": 1,
+                "timestamp": ts,
+                "request_id": f"HA_{ts}",
+                "error": "0",
+            }
+        else:
+            data = {
+                "action": "stop",
+                "state": 1,
+                "timestamp": ts,
+                "request_id": f"HA_{ts}",
+                "error": "0",
+            }
+
         await self._send_put_request(path, data)
 
     async def async_remote_shutdown(self) -> None:
         """Send remote_shutdown command."""
+        # Validation: Key OFF (0) AND Charger NOT connected
+        key_state = self.data.get("keySwitch")
+        charging_data = self.data.get("charging", {})
+        heartbeat = charging_data.get("chargingHeartBeat")
+
+        if key_state == 1:
+            _LOGGER.warning("Remote Shutdown blocked: Key is ON")
+            return
+        if heartbeat == "On":
+            _LOGGER.warning("Remote Shutdown blocked: Charger is connected")
+            return
+
         path = f"scooters/{self.scooter_id}/remote_shutdown"
+        ts = int(time.time() * 1000)
         # Based on logic: state 1 triggers shutdown
-        data = {"state": 1}
+        data = {
+            "state": 1,
+            "timestamp": ts,
+            "error": "0",
+        }
         await self._send_put_request(path, data)
 
     async def _send_put_request(self, path: str, data: Dict[str, Any]) -> bool:
