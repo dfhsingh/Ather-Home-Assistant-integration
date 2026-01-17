@@ -99,6 +99,12 @@ class AtherCoordinator:
         """Listen for data updates."""
         self._listeners.append(update_callback)
 
+        def remove_listener():
+            if update_callback in self._listeners:
+                self._listeners.remove(update_callback)
+
+        return remove_listener
+
     def _notify_listeners(self):
         """Notify all listeners that data has changed."""
         for callback in self._listeners:
