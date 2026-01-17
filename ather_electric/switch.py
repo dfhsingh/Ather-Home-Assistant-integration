@@ -26,12 +26,17 @@ async def async_setup_entry(
     """Set up the Ather Electric switch platform."""
     coordinator: AtherCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    async_add_entities(
-        [
-            AtherRemoteChargingSwitch(coordinator),
-            AtherShutdownProtectionSwitch(coordinator),
-        ]
-    )
+    entities = []
+    features = coordinator.data.get("features", {})
+
+    if features.get("atherStackRemoteCharging") == 1:
+        entities.append(AtherRemoteChargingSwitch(coordinator))
+
+    # Only add protection switch if remote shutdown is enabled
+    if features.get("atherStackRemoteShutdown") == 1:
+        entities.append(AtherShutdownProtectionSwitch(coordinator))
+
+    async_add_entities(entities)
 
 
 class AtherSwitch(CoordinatorEntity, SwitchEntity):

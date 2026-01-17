@@ -39,6 +39,7 @@ async def async_setup_entry(
         AtherModeRangeSensor(coordinator, "Sport", "SportModeRange"),
         AtherModeRangeSensor(coordinator, "Warp", "WarpModeRange"),
         AtherModeRangeSensor(coordinator, "SmartEco", "SmartEcoModeRange"),
+        AtherAltitudeSensor(coordinator),
         AtherTheftMovementSensor(coordinator),
     ]
 
@@ -278,3 +279,22 @@ class AtherTheftMovementSensor(AtherSensor):
     def native_value(self) -> str | None:
         """Return the state of the sensor."""
         return self.coordinator.get_data("TheftTowMovementState")
+
+
+class AtherAltitudeSensor(AtherSensor):
+    """Representation of the Altitude sensor."""
+
+    _attr_device_class = SensorDeviceClass.DISTANCE
+    _attr_native_unit_of_measurement = UnitOfLength.METERS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_name = "Altitude"
+    _attr_icon = "mdi:altimeter"
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_altitude"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the state of the sensor."""
+        return self.coordinator.get_data("altitude")

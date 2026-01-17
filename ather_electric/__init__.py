@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import voluptuous as vol
@@ -80,6 +81,16 @@ async def async_setup_entry(
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = coordinator
+
+    # Wait for initial data to ensure feature flags are loaded
+    try:
+        await asyncio.wait_for(coordinator.async_wait_for_initial_data(), timeout=10)
+    except asyncio.TimeoutError:
+        _LOGGER.warning(
+            "Timed out waiting for initial data. Remote features may not be enabled."
+        )
+    except Exception as err:
+        _LOGGER.error("Error waiting for initial data: %s", err)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

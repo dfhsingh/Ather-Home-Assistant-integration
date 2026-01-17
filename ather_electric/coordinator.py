@@ -48,6 +48,7 @@ class AtherCoordinator:
         # Token Management
         self.refresh_token: Optional[str] = None
         self.token_file = hass.config.path(".ather_tokens.json")
+        self._ready_event = asyncio.Event()
 
     async def async_ping_scooter(self) -> None:
         """Send ping_my_scooter command."""
@@ -343,8 +344,12 @@ class AtherCoordinator:
 
         # Handle 'app' data for mode ranges
         app_data = data.get("app", {})
-        if app_data and "modeRange" in app_data:
-            self.data["modeRange"] = app_data["modeRange"]
+        if app_data:
+            if "modeRange" in app_data:
+                self.data["modeRange"] = app_data["modeRange"]
+            if "features" in app_data:
+                self.data["features"] = app_data["features"]
+                self._ready_event.set()
 
         if "lastSyncedTime" in data:
             self.data["lastSyncedTime"] = data["lastSyncedTime"]
@@ -356,8 +361,12 @@ class AtherCoordinator:
                 if len(parts) == 2:
                     category, field = parts
 
-                    if category == "app" and field == "modeRange":
-                        self.data["modeRange"] = value
+                    if category == "app":
+                        if field == "modeRange":
+                            self.data["modeRange"] = value
+                        elif field == "features":
+                            self.data["features"] = value
+                            self._ready_event.set()
 
         # Check nested lastSyncedTime (if it comes under root or bike)
         # Based on logs, it was /scooters/s_421436/lastSyncedTime -> Value: ...
@@ -370,3 +379,9 @@ class AtherCoordinator:
         if gps_data and "lat" in gps_data and "lng" in gps_data:
             self.data["lat"] = gps_data["lat"]
             self.data["lon"] = gps_data["lng"]
+        if gps_data and "ALT_M" in gps_data:
+            self.data["altitude"] = gps_data["ALT_M"]
+
+    async def async_wait_for_initial_data(self) -> None:
+        """Wait for initial data to be received."""
+        await self._ready_event.wait()

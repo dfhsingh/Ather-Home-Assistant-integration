@@ -25,12 +25,16 @@ async def async_setup_entry(
     """Set up the Ather Electric button platform."""
     coordinator: AtherCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    async_add_entities(
-        [
-            AtherPingButton(coordinator),
-            AtherRemoteShutdownButton(coordinator),
-        ]
-    )
+    entities = []
+    features = coordinator.data.get("features", {})
+
+    if features.get("atherStackPingMyScooter") == 1:
+        entities.append(AtherPingButton(coordinator))
+
+    if features.get("atherStackRemoteShutdown") == 1:
+        entities.append(AtherRemoteShutdownButton(coordinator))
+
+    async_add_entities(entities)
 
 
 class AtherButton(CoordinatorEntity, ButtonEntity):
