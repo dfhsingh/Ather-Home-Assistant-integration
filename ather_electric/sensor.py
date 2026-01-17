@@ -41,6 +41,17 @@ async def async_setup_entry(
         AtherModeRangeSensor(coordinator, "SmartEco", "SmartEcoModeRange"),
         AtherAltitudeSensor(coordinator),
         AtherTheftMovementSensor(coordinator),
+        # New Sensors
+        AtherTripDistanceSensor(coordinator, "A"),
+        AtherTripDistanceSensor(coordinator, "B"),
+        AtherTripEfficiencySensor(coordinator, "A"),
+        AtherTripEfficiencySensor(coordinator, "B"),
+        AtherTripAvgSpeedSensor(coordinator, "A"),
+        AtherTripAvgSpeedSensor(coordinator, "B"),
+        AtherNavigationStateSensor(coordinator),
+        AtherSubscriptionStatusSensor(coordinator),
+        AtherTimeRemainingSensor(coordinator, "full", "Time to Full Charge"),
+        AtherTimeRemainingSensor(coordinator, "80", "Time to 80% Charge"),
     ]
 
     async_add_entities(entities)
@@ -297,4 +308,173 @@ class AtherAltitudeSensor(AtherSensor):
     @property
     def native_value(self) -> float | None:
         """Return the state of the sensor."""
-        return self.coordinator.get_data("altitude")
+        val = self.coordinator.get_data("altitude")
+        if val is not None:
+            return round(float(val), 2)
+        return None
+
+
+class AtherTripDistanceSensor(AtherSensor):
+    """Representation of Trip Distance."""
+
+    _attr_device_class = SensorDeviceClass.DISTANCE
+    _attr_native_unit_of_measurement = UnitOfLength.KILOMETERS
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+
+    def __init__(self, coordinator, trip_id: str) -> None:
+        """Initialize."""
+        super().__init__(coordinator)
+        self.trip_id = trip_id
+        self._attr_name = f"Trip {trip_id} Distance"
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_trip_{self.trip_id}_distance"
+
+    @property
+    def native_value(self) -> float | None:
+        key = f"trip{self.trip_id}"
+        data = self.coordinator.get_data(key, {})
+        return data.get("distance")
+
+
+class AtherTripEfficiencySensor(AtherSensor):
+    """Representation of Trip Efficiency."""
+
+    _attr_name = "Trip Efficiency"
+    _attr_native_unit_of_measurement = "km/kWh"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, trip_id: str) -> None:
+        """Initialize."""
+        super().__init__(coordinator)
+        self.trip_id = trip_id
+        self._attr_name = f"Trip {trip_id} Efficiency"
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_trip_{self.trip_id}_efficiency"
+
+    @property
+    def native_value(self) -> float | None:
+        key = f"trip{self.trip_id}"
+        data = self.coordinator.get_data(key, {})
+        val = data.get("efficiency")
+        if val:
+            try:
+                wh_km = float(val)
+                if wh_km > 0:
+                    # Convert Wh/km to km/kWh
+                    # 1 kWh = 1000 Wh
+                    # km/kWh = 1000 / (Wh/km)
+                    return round(1000 / wh_km, 2)
+            except (ValueError, TypeError):
+                pass
+        return None
+
+
+class AtherTripAvgSpeedSensor(AtherSensor):
+    """Representation of Trip Average Speed."""
+
+    _attr_device_class = SensorDeviceClass.SPEED
+    _attr_native_unit_of_measurement = UnitOfSpeed.KILOMETERS_PER_HOUR
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, trip_id: str) -> None:
+        """Initialize."""
+        super().__init__(coordinator)
+        self.trip_id = trip_id
+        self._attr_name = f"Trip {trip_id} Avg Speed"
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_trip_{self.trip_id}_avg_speed"
+
+    @property
+    def native_value(self) -> float | None:
+        key = f"trip{self.trip_id}"
+        data = self.coordinator.get_data(key, {})
+        return data.get("avgSpeed")
+
+
+class AtherNavigationStateSensor(AtherSensor):
+    """Representation of Navigation State."""
+
+    _attr_name = "Navigation Status"
+    _attr_icon = "mdi:map-marker-path"
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_nav_status"
+
+    @property
+    def native_value(self) -> str | None:
+        return self.coordinator.get_data("navigation_status")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, any]:
+        """Return attributes."""
+        return {
+            "destination": self.coordinator.get_data("navigation_title"),
+        }
+
+
+class AtherSubscriptionStatusSensor(AtherSensor):
+    """Representation of Subscription Status."""
+
+    _attr_name = "Subscription Status"
+    _attr_icon = "mdi:certificate"
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_sub_status"
+
+    @property
+    def native_value(self) -> str | None:
+        return self.coordinator.get_data("subscription_status")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, any]:
+        """Return attributes."""
+        return {
+            "plan": self.coordinator.get_data("subscription_plan"),
+        }
+
+
+class AtherTimeRemainingSensor(AtherSensor):
+    """Representation of Time Remaining to Charge."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:battery-clock"
+
+    def __init__(self, coordinator, charge_type: str, name: str) -> None:
+        """Initialize."""
+        super().__init__(coordinator)
+        self.charge_type = charge_type  # "full" or "80"
+        self._attr_name = name
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_time_to_{self.charge_type}"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the state of the sensor."""
+        # charging data is updated in coordinator as a dict
+        charging_data = self.coordinator.get_data("charging", {})
+        ts_utc_str = None
+
+        if self.charge_type == "full":
+            ts_utc_str = charging_data.get("time2FullChargeUTC")
+        elif self.charge_type == "80":
+            ts_utc_str = charging_data.get("time2EightyChargeUTC")
+
+        if ts_utc_str and str(ts_utc_str).isdigit():
+            try:
+                from datetime import datetime, timezone
+
+                # Log says these are seconds.
+                return datetime.fromtimestamp(int(ts_utc_str), tz=timezone.utc)
+            except Exception:
+                pass
+        return None

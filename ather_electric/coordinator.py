@@ -59,7 +59,9 @@ class AtherCoordinator:
     async def async_remote_charging(self, action: str) -> None:
         """Send remote_charging command (start/stop)."""
         path = f"scooters/{self.scooter_id}/remote_charging"
-        data = {"action": action}
+        # API requires integer 1 for start, 0 for stop
+        payload_val = 1 if action == "start" else 0
+        data = {"action": payload_val}
         await self._send_put_request(path, data)
 
     async def async_remote_shutdown(self) -> None:
@@ -345,6 +347,45 @@ class AtherCoordinator:
                         ):
                             self.data["charging"] = {}
                         self.data["charging"][field] = value
+
+                    # Handle navigation updates
+                    elif category == "navigation":
+                        # Simplistic flattening for status/title if needed,
+                        # but usually better to update full obj if possible.
+                        # For patch updates like navigation/destination/title:
+                        pass  # TODO: more complex patch handling if deeply nested updates come individually
+
+        # --- 5. New Fields Processing (Trip, Navigation, Subscription) ---
+
+        # Trip Data
+        if "trip" in data:
+            trip = data["trip"]
+            if "tripA" in trip:
+                self.data["tripA"] = trip["tripA"]
+            if "tripB" in trip:
+                self.data["tripB"] = trip["tripB"]
+
+        # Navigation Data
+        if "navigation" in data:
+            nav_data = data["navigation"]
+            self.data["navigation_status"] = nav_data.get("status")
+            dest = nav_data.get("destination", {})
+            if dest:
+                self.data["navigation_title"] = dest.get("title")
+
+        # Subscription Data
+        if "subscription" in data:
+            sub = data["subscription"]
+            # Connect plan is usually what we care about
+            connect_plan = sub.get("connect", {})
+            self.data["subscription_status"] = connect_plan.get("status")
+            self.data["subscription_plan"] = connect_plan.get("plan")
+
+        # Ensure chargingHeartBeat is accessible
+        if "charging" in data:
+            self.data["charging"] = data["charging"]
+
+        # Also maintain a raw dump if needed, or just update dictFor Trip stats, we need to extract them from the "trip" object if available
 
         # Also maintain a raw dump if needed, or just update dict
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.components.switch import SwitchEntity
+from homeassistant.components.switch import SwitchEntity, SwitchDeviceClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
@@ -57,34 +57,37 @@ class AtherRemoteChargingSwitch(AtherSwitch):
     """Switch to control remote charging."""
 
     _attr_name = "Remote Charging"
-    _attr_unique_id = "remote_charging"
+    _attr_device_class = SwitchDeviceClass.SWITCH
     _attr_icon = "mdi:battery-charging"
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_remote_charging"
+
+    @property
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        # Check for chargingHeartBeat as requested by user
+        if not self.coordinator.last_update_success:
+            return False
+
+        charging_data = self.coordinator.get_data("charging", {})
+        return charging_data.get("chargingHeartBeat") == "On"
 
     @property
     def is_on(self) -> bool:
         """Return true if the switch is on."""
-        # Check 'charging' status from coordinator data
-        # Example data: 'charging': {'status': 'charging', ...} or similar
-        # If unknown, we might default to False or check data structure carefully
-        charging_data = self.coordinator.data.get("charging", {})
-        # This logic might need adjustment based on actual API response values
-        # Common values: "charging", "not_charging", "optimised_charging_on"
-        # Since we are controlling "Remote Charging" (which might physically enable the charger),
-        # we can assume if status implies charging, it's ON.
-        # However, accurate feedback depends on the scooter's response.
-        status = charging_data.get("status", "").lower()
-        return status in ["charging", "optimised_charging_on", "soc_reached_100"]
+        charging_data = self.coordinator.get_data("charging", {})
+        status = charging_data.get("chargingStatus")
+        return status == "Charging"
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the entity on."""
         await self.coordinator.async_remote_charging("start")
-        # Optimistic update or wait for next poll/push
-        self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the entity off."""
         await self.coordinator.async_remote_charging("stop")
-        self.async_write_ha_state()
 
 
 class AtherShutdownProtectionSwitch(AtherSwitch):

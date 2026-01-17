@@ -25,6 +25,7 @@ async def async_setup_entry(
     entities = [
         AtherChargingSensor(coordinator),
         AtherKeySensor(coordinator),
+        AtherChargingHeartbeatSensor(coordinator),
     ]
     # Check if we have data for 'is_locked' or similar keys in real payload before adding
     # For now adding Charging as it is well known (0/1)
@@ -97,3 +98,20 @@ class AtherKeySensor(AtherBinarySensor):
             val = self.coordinator.get_data("bike", {}).get("keySwitch")
 
         return val == "On"
+
+
+class AtherChargingHeartbeatSensor(AtherBinarySensor):
+    """Representation of the Charging Heartbeat (Diagnostic)."""
+
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_name = "Charging Heartbeat"
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_charging_heartbeat"
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return true if heartbeat is On."""
+        charging_data = self.coordinator.get_data("charging", {})
+        return charging_data.get("chargingHeartBeat") == "On"
