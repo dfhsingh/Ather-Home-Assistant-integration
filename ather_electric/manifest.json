@@ -4,9 +4,9 @@
   "codeowners": [],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/dfhsingh/ather_electric",
+  "documentation": "https://github.com/dfhsingh/Ather-Home-Assistant-integration",
   "iot_class": "cloud_push",
-  "issue_tracker": "https://github.com/dfhsingh/ather_electric/issues",
+  "issue_tracker": "https://github.com/dfhsingh/Ather-Home-Assistant-integration/issues",
   "requirements": [],
   "version": "1.1.0"
 }

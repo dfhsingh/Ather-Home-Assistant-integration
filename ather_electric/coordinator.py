@@ -14,7 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import AtherAPI
-from .const import WS_URL, DOMAIN
+from .const import WS_URL, DOMAIN, CONF_ENABLE_RAW_LOGGING, DEFAULT_ENABLE_RAW_LOGGING
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,6 +50,9 @@ class AtherCoordinator:
         self.refresh_token: Optional[str] = None
         self.token_file = hass.config.path(".ather_tokens.json")
         self._ready_event = asyncio.Event()
+
+        # Config Options
+        self.enable_raw_logging = False  # Will be updated from entry options
 
     async def async_ping_scooter(self) -> None:
         """Send ping_my_scooter command."""
@@ -281,6 +284,10 @@ class AtherCoordinator:
                     }
                     await ws.send_json(sub_payload_sync)
 
+                    # Mark as ready once subscriptions are sent
+                    # This avoids 'Timed out waiting for initial data' if data is slow
+                    self._ready_event.set()
+
                     async for msg in ws:
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             await self._handle_message(msg.data)
@@ -301,6 +308,13 @@ class AtherCoordinator:
     async def _handle_message(self, message: str):
         """Parse incoming WebSocket message."""
         try:
+            # Raw Logging
+            if self.enable_raw_logging:
+                log_path = self.hass.config.path("ather_ws_debug.log")
+                await self.hass.async_add_executor_job(
+                    self._log_raw_message, log_path, message
+                )
+
             msg = json.loads(message)
             if "t" in msg and msg["t"] == "d":
                 data = msg.get("d", {})
@@ -501,3 +515,17 @@ class AtherCoordinator:
     async def async_wait_for_initial_data(self) -> None:
         """Wait for initial data to be received."""
         await self._ready_event.wait()
+
+    def set_options(self, options):
+        """Update options."""
+        self.enable_raw_logging = options.get(
+            CONF_ENABLE_RAW_LOGGING, DEFAULT_ENABLE_RAW_LOGGING
+        )
+
+    def _log_raw_message(self, path: str, message: str):
+        """Log raw message to file (runs in executor)."""
+        try:
+            with open(path, "a") as f:
+                f.write(f"{int(time.time() * 1000)}: {message}\n")
+        except Exception as err:
+            _LOGGER.error("Error writing to raw log: %s", err)

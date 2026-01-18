@@ -94,7 +94,20 @@ async def async_setup_entry(
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    # Apply initial options
+    if entry.options:
+        coordinator.set_options(entry.options)
+
+    # Register update listener
+    entry.async_on_unload(entry.add_update_listener(update_listener))
+
     return True
+
+
+async def update_listener(hass: HomeAssistant, entry: config_entries.ConfigEntry):
+    """Handle options update."""
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator.set_options(entry.options)
 
 
 async def async_unload_entry(

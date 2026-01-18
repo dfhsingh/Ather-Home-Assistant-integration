@@ -21,7 +21,10 @@ from .const import (
     CONF_SCOOTER_ID,
     DOMAIN,
     FIREBASE_API_KEY,
+    CONF_ENABLE_RAW_LOGGING,
+    DEFAULT_ENABLE_RAW_LOGGING,
 )
+from homeassistant.core import callback
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -167,4 +170,41 @@ class AtherConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "api_token": self.api_token,
                 CONF_NAME: name,
             },
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> config_entries.OptionsFlow:
+        """Create the options flow."""
+        return AtherOptionsFlowHandler(config_entry)
+
+
+class AtherOptionsFlowHandler(config_entries.OptionsFlow):
+    """Ather Options flow handler."""
+
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        """Initialize options flow."""
+        self._config_entry = config_entry
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Manage the options."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_ENABLE_RAW_LOGGING,
+                        default=self._config_entry.options.get(
+                            CONF_ENABLE_RAW_LOGGING, DEFAULT_ENABLE_RAW_LOGGING
+                        ),
+                    ): bool,
+                }
+            ),
         )

@@ -33,3 +33,6 @@ COMMON_HEADERS = {
     "Source": "ATHER_APP/11.3.0",
     "User-Agent": "Ktor client",
 }
+
+CONF_ENABLE_RAW_LOGGING = "enable_raw_logging"
+DEFAULT_ENABLE_RAW_LOGGING = False
