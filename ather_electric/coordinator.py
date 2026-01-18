@@ -372,6 +372,16 @@ class AtherCoordinator:
                 self._update_gps(bike["GPSLocation"])
             if "TheftTowMovementState" in bike:
                 self.data["TheftTowMovementState"] = bike["TheftTowMovementState"]
+            if "vehicleState" in bike:
+                self.data["vehicleState"] = bike["vehicleState"]
+            if "ShutdownVacationMode" in bike:
+                self.data["ShutdownVacationMode"] = bike["ShutdownVacationMode"]
+            if "parkingAssist" in bike:
+                self.data["parkingAssist"] = bike["parkingAssist"]
+            if "UserFacingSoftwareVersion" in bike:
+                self.data["UserFacingSoftwareVersion"] = bike[
+                    "UserFacingSoftwareVersion"
+                ]
 
         # Check root level (sometimes updates come as flattened patches)
         if "batterySOC" in data:
@@ -422,6 +432,14 @@ class AtherCoordinator:
                             self.data["otaStatus"] = value
                         elif field == "TheftTowMovementState":
                             self.data["TheftTowMovementState"] = value
+                        elif field == "vehicleState":
+                            self.data["vehicleState"] = value
+                        elif field == "ShutdownVacationMode":
+                            self.data["ShutdownVacationMode"] = value
+                        elif field == "parkingAssist":
+                            self.data["parkingAssist"] = value
+                        elif field == "UserFacingSoftwareVersion":
+                            self.data["UserFacingSoftwareVersion"] = value
 
                     # Handle charging/* updates (update the nested dict)
                     elif category == "charging":
@@ -464,9 +482,25 @@ class AtherCoordinator:
             self.data["subscription_status"] = connect_plan.get("status")
             self.data["subscription_plan"] = connect_plan.get("plan")
 
-        # Ensure chargingHeartBeat is accessible
+        # Savings Data
+        if "app" in data and "savings" in data["app"]:
+            self.data["savings"] = data["app"]["savings"]
+
+        # Stats (Projected Range)
+        if "stats" in data:
+            trip_summary = data["stats"].get("tripSummary", {})
+            if trip_summary:
+                self.data["tripSummary"] = trip_summary
+
+        # Flag Features
+        if "features" in data:
+            self.data["features"] = data["features"]
+
+        # Ensure chargingHeartBeat and chargerType is accessible
         if "charging" in data:
             self.data["charging"] = data["charging"]
+            if "chargerType" in data["charging"]:
+                self.data["chargerType"] = data["charging"]["chargerType"]
 
         # Also maintain a raw dump if needed, or just update dictFor Trip stats, we need to extract them from the "trip" object if available
 
@@ -497,6 +531,8 @@ class AtherCoordinator:
                         elif field == "features":
                             self.data["features"] = value
                             self._ready_event.set()
+                        elif field == "savings":
+                            self.data["savings"] = value
 
         # Check nested lastSyncedTime (if it comes under root or bike)
         # Based on logs, it was /scooters/s_421436/lastSyncedTime -> Value: ...

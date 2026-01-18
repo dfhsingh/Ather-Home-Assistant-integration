@@ -39,6 +39,23 @@ async def async_setup_entry(
         AtherModeRangeSensor(coordinator, "Sport", "SportModeRange"),
         AtherModeRangeSensor(coordinator, "Warp", "WarpModeRange"),
         AtherModeRangeSensor(coordinator, "SmartEco", "SmartEcoModeRange"),
+        AtherModeRangeSensor(coordinator, "WarpPlus", "WarpPlusModeRange"),
+        AtherVehicleStateSensor(coordinator),
+        AtherParkingAssistSensor(coordinator),
+        AtherChargerTypeSensor(coordinator),
+        AtherSoftwareVersionSensor(coordinator),
+        AtherSavingsSensor(coordinator),
+        # Projected Ranges (Stats)
+        AtherProjectedRangeSensor(coordinator, "Eco", "ecoModePredictedRange_kms"),
+        AtherProjectedRangeSensor(coordinator, "Ride", "rideModePredictedRange_kms"),
+        AtherProjectedRangeSensor(coordinator, "Sport", "sportModePredictedRange_kms"),
+        AtherProjectedRangeSensor(coordinator, "Warp", "warpModePredictedRange_kms"),
+        AtherProjectedRangeSensor(
+            coordinator, "WarpPlus", "warpPlusModePredictedRange_kms"
+        ),
+        AtherProjectedRangeSensor(
+            coordinator, "SmartEco", "smartEcoModePredictedRange_kms"
+        ),
         AtherAltitudeSensor(coordinator),
         AtherTheftMovementSensor(coordinator),
         # New Sensors
@@ -477,4 +494,113 @@ class AtherTimeRemainingSensor(AtherSensor):
                 return datetime.fromtimestamp(int(ts_utc_str), tz=timezone.utc)
             except Exception:
                 pass
+
+
+class AtherVehicleStateSensor(AtherSensor):
+    """Representation of the Vehicle State sensor."""
+
+    _attr_name = "Vehicle State"
+    _attr_icon = "mdi:scooter"
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_vehicle_state"
+
+    @property
+    def native_value(self) -> str | None:
+        return self.coordinator.get_data("vehicleState")
+
+
+class AtherParkingAssistSensor(AtherSensor):
+    """Representation of Parking Assist status."""
+
+    _attr_name = "Parking Assist"
+    _attr_icon = "mdi:parking"
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_parking_assist"
+
+    @property
+    def native_value(self) -> str | None:
+        return self.coordinator.get_data("parkingAssist")
+
+
+class AtherChargerTypeSensor(AtherSensor):
+    """Representation of Charger Type."""
+
+    _attr_name = "Charger Type"
+    _attr_icon = "mdi:ev-plug-type2"
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_charger_type"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the state of the sensor."""
+        return self.coordinator.get_data("chargerType")
+
+
+class AtherSoftwareVersionSensor(AtherSensor):
+    """Representation of User Facing Software Version."""
+
+    _attr_name = "Software Version"
+    _attr_icon = "mdi:cellphone-arrow-down"
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_sw_version"
+
+    @property
+    def native_value(self) -> str | None:
+        return self.coordinator.get_data("UserFacingSoftwareVersion")
+
+
+class AtherSavingsSensor(AtherSensor):
+    """Representation of Total Savings."""
+
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_name = "Total Savings"
+    _attr_icon = "mdi:cash"
+    # Unit not specified in log, assuming local currency or just number
+    # If INR, we could use "₹". For now leaving unit generic or None.
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_savings"
+
+    @property
+    def native_value(self) -> float | None:
+        val = self.coordinator.get_data("savings")
+        if val is not None:
+            return round(float(val), 2)
+        return None
+
+
+class AtherProjectedRangeSensor(AtherSensor):
+    """Representation of Projected Range (Stats)."""
+
+    _attr_device_class = SensorDeviceClass.DISTANCE
+    _attr_native_unit_of_measurement = UnitOfLength.KILOMETERS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, mode_name: str, key_name: str) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._key_name = key_name
+        self._attr_name = f"Projected Range ({mode_name})"
+        self._id_suffix = mode_name.lower().replace(" ", "_")
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_proj_range_{self._id_suffix}"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the state of the sensor."""
+        # Data is in tripSummary object
+        trip_summary = self.coordinator.get_data("tripSummary", {})
+        if trip_summary:
+            return trip_summary.get(self._key_name)
         return None
