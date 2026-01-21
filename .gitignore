@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.git
+.mypy_cache
+.pytest_cache
+.hypothesize
+
+# Mac
+.DS_Store
+
+# VS Code
+.vscode/
+
+# Project Specific (Secrets & Logs)
+.env
+.ather_tokens.json
+.ather_test_tokens.json
+auth_data.txt
+websocket_log.txt
+*.log
+deploy_local.sh
+private/
+.agent/

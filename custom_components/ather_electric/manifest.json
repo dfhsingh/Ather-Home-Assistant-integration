@@ -1,0 +1,14 @@
+{
+  "domain": "ather_electric",
+  "name": "Ather Electric",
+  "codeowners": [
+    "@dfhsingh"
+  ],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/dfhsingh/Ather-Home-Assistant-integration",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/dfhsingh/Ather-Home-Assistant-integration/issues",
+  "requirements": [],
+  "version": "2026.01.36"
+}
