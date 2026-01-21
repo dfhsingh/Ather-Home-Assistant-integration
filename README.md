@@ -37,7 +37,7 @@ Unofficial Home Assistant integration for Ather Energy electric scooters (450X, 
 1. Go to **Settings** > **Devices & Services**.
 2. Click **+ ADD INTEGRATION**.
 3. Search for "Ather Electric".
-4. Enter your Ather registered Phone Number and OTP
+4. Enter your Ather registered Phone Number, key* and OTP  // required key is to identify Ather server, its avaialble in mobile app
 5. Follow the prompts to complete proper setup.
 
 ## Entities
