@@ -39,7 +39,9 @@ class AtherTracker(TrackerEntity):
             identifiers={(DOMAIN, coordinator.scooter_id)},
             name=coordinator.device_name,
             manufacturer="Ather Energy",
-            model="450X",
+            model=coordinator.get_data("model_type") or "450X",
+            hw_version=coordinator.get_data("model"),
+            sw_version=f"{coordinator.get_data('UserFacingSoftwareVersion')} (v{coordinator.integration_version})",
         )
         _LOGGER.debug("AtherTracker initialized for %s", coordinator.scooter_id)
 
@@ -91,7 +93,7 @@ class AtherTracker(TrackerEntity):
         accuracy = self.coordinator.get_data("gps_accuracy")
         if accuracy:
             attrs["gps_accuracy"] = accuracy
-        
+
         # Live Location Sharing & Emergency Contacts
         sharing = self.coordinator.get_data("live_location_sharing", {})
         if sharing:

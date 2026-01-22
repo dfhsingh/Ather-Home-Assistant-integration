@@ -12,8 +12,11 @@ from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+import logging
 
 from .const import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -23,6 +26,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Ather Electric sensors."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
+    _LOGGER.debug(
+        "Setting up Ather Sensors. Coordinator Data keys: %s",
+        list(coordinator.data.keys()),
+    )
 
     entities = [
         AtherBatterySensor(coordinator),
@@ -41,7 +48,6 @@ async def async_setup_entry(
         AtherModeRangeSensor(coordinator, "SmartEco", "SmartEcoModeRange"),
         AtherModeRangeSensor(coordinator, "WarpPlus", "WarpPlusModeRange"),
         AtherVehicleStateSensor(coordinator),
-
         AtherChargerTypeSensor(coordinator),
         AtherSoftwareVersionSensor(coordinator),
         AtherSavingsSensor(coordinator),
@@ -96,7 +102,7 @@ async def async_setup_entry(
         AtherCurrentTripDurationSensor(coordinator),
         AtherCurrentTripSpeedSensor(coordinator),
         AtherCurrentTripEfficiencySensor(coordinator),
-        AtherAltitudeChangeSensor(coordinator), # Added this line
+        AtherAltitudeChangeSensor(coordinator),  # Added this line
         # Navigation & Subscription
         AtherNavigationTimeSensor(coordinator),
         AtherSubscriptionExpirySensor(coordinator),
@@ -106,8 +112,9 @@ async def async_setup_entry(
         AtherDiagnosticSensor(
             coordinator, "Controller Type", "controller_type", "mdi:cpu-64-bit"
         ),
-        AtherDiagnosticSensor(coordinator, "Generation", "generation", "mdi:identifier"),
-
+        AtherDiagnosticSensor(
+            coordinator, "Generation", "generation", "mdi:identifier"
+        ),
         AtherDiagnosticSensor(coordinator, "City", "city", "mdi:city"),
         AtherRemoteShutdownSensor(coordinator),
     ]
@@ -135,7 +142,7 @@ class AtherSensor(SensorEntity):
             manufacturer="Ather Energy",
             model=model_name,
             hw_version=coordinator.get_data("model"),  # e.g. "xhr"
-            sw_version=coordinator.get_data("UserFacingSoftwareVersion"),
+            sw_version=f"{coordinator.get_data('UserFacingSoftwareVersion')} (v{coordinator.integration_version})",
         )
 
     async def async_added_to_hass(self) -> None:
@@ -562,9 +569,6 @@ class AtherVehicleStateSensor(AtherSensor):
         return self.coordinator.get_data("vehicleState")
 
 
-
-
-
 class AtherChargerTypeSensor(AtherSensor):
     """Representation of Charger Type."""
 
@@ -613,10 +617,10 @@ class AtherSavingsSensor(AtherSensor):
         # Check 'app' -> 'savings' or 'savings' direct
         val = self.coordinator.get_data("app", {}).get("savings")
         if val is None:
-             val = self.coordinator.get_data("savings")
-        
+            val = self.coordinator.get_data("savings")
+
         if val is not None:
-             return round(float(val), 2)
+            return round(float(val), 2)
         return None
 
 
@@ -650,8 +654,6 @@ class AtherRemoteShutdownSensor(AtherSensor):
             "request_id": data.get("request_id"),
             "timestamp": data.get("timestamp"),
         }
-
-
 
 
 class AtherProjectedRangeSensor(AtherSensor):
@@ -773,6 +775,7 @@ class AtherWarrantySensor(AtherSensor):
 
         return item_data.get(self.key)
 
+
 class AtherCurrentTripSensor(AtherSensor):
     """Base class for Current Trip sensors."""
 
@@ -882,23 +885,35 @@ class AtherCurrentTripEfficiencySensor(AtherCurrentTripSensor):
         """Return the calculated efficiency."""
         trip_start_soc = self.coordinator.get_data("trip_start_soc")
         current_soc = self.coordinator.get_data("batterySOC")
+
+        # Distance might be at root or in current_trip
         distance = self.coordinator.get_data("distance")
+        if distance is None:
+            distance = self.current_trip_data.get("distance")
 
         if trip_start_soc is None or current_soc is None or distance is None:
             return None
-        
+
         try:
-             # Logic matching user's formula: Distance / ((StartSOC - CurrentSOC) * 3.7 / 100)
-             soc_diff = float(trip_start_soc) - float(current_soc)
-             if soc_diff <= 0:
-                 return 0 # Avoid division by zero or negative efficiency if SOC rose (regen?)
-             
-             energy_consumed = soc_diff * 3.7 / 100.0
-             if energy_consumed == 0:
-                 return 0
-                 
-             return float(distance) / energy_consumed
+            dist_val = float(distance)
+            # Logic matching user's formula: Distance / ((StartSOC - CurrentSOC) * 3.7 / 100)
+            soc_diff = float(trip_start_soc) - float(current_soc)
+            # 1. Handle the "scooter hasn't moved" case explicitly
+            if dist_val == 0:
+                return 0
+
+            # 2. Handle cases where SOC hasn't dropped yet (avoid division by zero)
+            # This happens at the very start of a trip
+            if soc_diff <= 0:
+                return 0  # Avoid division by zero or negative efficiency if SOC rose (regen?)
+
+            energy_consumed = soc_diff * 3.7 / 100.0
+            if energy_consumed == 0:
+                return 0
+
+            return round(dist_val / energy_consumed, 2)
         except (ValueError, TypeError):
+            _LOGGER.error("AtherCurrentTripEfficiencySensor: %s", ValueError, TypeError)
             return None
 
 

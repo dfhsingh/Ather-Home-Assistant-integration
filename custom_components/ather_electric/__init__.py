@@ -61,6 +61,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
+from homeassistant.loader import async_get_integration
+
+# ... existing imports ...
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: config_entries.ConfigEntry
 ) -> bool:
@@ -70,8 +75,11 @@ async def async_setup_entry(
     api_key = entry.data[CONF_FIREBASE_API_KEY]
     device_name = entry.data.get(CONF_NAME, "Ather Scooter")
 
+    integration = await async_get_integration(hass, DOMAIN)
+    integration_version = integration.version
+
     coordinator = AtherCoordinator(
-        hass, scooter_id, firebase_token, api_key, device_name
+        hass, scooter_id, firebase_token, api_key, device_name, integration_version
     )
 
     # Start the coordinator (WebSocket connection)
@@ -120,4 +128,3 @@ async def async_unload_entry(
         hass.data[DOMAIN].pop(entry.entry_id)
 
     return unload_ok
-

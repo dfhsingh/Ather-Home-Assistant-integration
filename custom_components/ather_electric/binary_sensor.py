@@ -37,7 +37,10 @@ async def async_setup_entry(
             coordinator, "vehicle_parkAssist", "Parking Assist Feature", "mdi:parking"
         ),
         AtherFeatureBinarySensor(
-            coordinator, "vehicle_cruiseControl", "Cruise Control Feature", "mdi:speedometer-auto"
+            coordinator,
+            "vehicle_cruiseControl",
+            "Cruise Control Feature",
+            "mdi:speedometer-auto",
         ),
         AtherFeatureBinarySensor(
             coordinator, "vehicle_fallDetection", "Fall Detection", "mdi:alert-box"
@@ -54,36 +57,49 @@ async def async_setup_entry(
         AtherFeatureBinarySensor(
             coordinator, "atherStackUnsafeParking", "Unsafe Parking", "mdi:parking"
         ),
-
         AtherFeatureBinarySensor(
             coordinator, "vehicle_autoIndicator", "Auto Indicator", "mdi:indicator"
         ),
         # Remote Operations Features
         AtherFeatureBinarySensor(
-             coordinator, "atherStackRemoteCharging", "Remote Charging Feature", "mdi:battery-charging-wireless"
+            coordinator,
+            "atherStackRemoteCharging",
+            "Remote Charging Feature",
+            "mdi:battery-charging-wireless",
         ),
         AtherFeatureBinarySensor(
-             coordinator, "atherStackRemoteShutdown", "Remote Shutdown Feature", "mdi:power"
+            coordinator,
+            "atherStackRemoteShutdown",
+            "Remote Shutdown Feature",
+            "mdi:power",
         ),
         AtherFeatureBinarySensor(
-             coordinator, "atherStackPingMyScooter", "Find My Scooter Feature", "mdi:map-marker-radius"
+            coordinator,
+            "atherStackPingMyScooter",
+            "Find My Scooter Feature",
+            "mdi:map-marker-radius",
         ),
         # Advanced Vehicle Features
         AtherFeatureBinarySensor(
-             coordinator, "vehicle_smartCharging", "Smart Charging Feature", "mdi:battery-sync"
+            coordinator,
+            "vehicle_smartCharging",
+            "Smart Charging Feature",
+            "mdi:battery-sync",
         ),
         AtherFeatureBinarySensor(
-             coordinator, "vehicle_tcsEnable", "TCS Feature", "mdi:tire"
+            coordinator, "vehicle_tcsEnable", "TCS Feature", "mdi:tire"
         ),
-
-         AtherFeatureBinarySensor(
+        AtherFeatureBinarySensor(
             coordinator, "vehicle_guideMeHome", "Guide Me Home", "mdi:lightbulb-on"
         ),
         AtherFeatureBinarySensor(
             coordinator, "vehicle_publicCharging", "Public Charging", "mdi:ev-station"
         ),
         AtherFeatureBinarySensor(
-            coordinator, "atherStackLiveLocation", "Live Location Sharing", "mdi:share-variant"
+            coordinator,
+            "atherStackLiveLocation",
+            "Live Location Sharing",
+            "mdi:share-variant",
         ),
         AtherFeatureBinarySensor(
             coordinator, "atherStackSportsScore", "Sports Score Widget", "mdi:trophy"
@@ -115,7 +131,7 @@ class AtherBinarySensor(BinarySensorEntity):
             manufacturer="Ather Energy",
             model=model_name,
             hw_version=coordinator.get_data("model"),  # e.g. "xhr"
-            sw_version=coordinator.get_data("UserFacingSoftwareVersion"),
+            sw_version=f"{coordinator.get_data('UserFacingSoftwareVersion')} (v{coordinator.integration_version})",
         )
 
     async def async_added_to_hass(self) -> None:
@@ -232,7 +248,7 @@ class AtherVacationModeSensor(AtherBinarySensor):
 class AtherParkingAssistStatusSensor(AtherBinarySensor):
     """Representation of the Parking Assist status (Active)."""
 
-    _attr_device_class = None # Generic on/off, or maybe RUNNING?
+    _attr_device_class = None  # Generic on/off, or maybe RUNNING?
     _attr_name = "Parking Assist Status"
     _attr_icon = "mdi:parking"
 
@@ -270,7 +286,9 @@ class AtherFeatureBinarySensor(AtherBinarySensor):
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, coordinator, feature_key: str, name: str, icon: str = None) -> None:
+    def __init__(
+        self, coordinator, feature_key: str, name: str, icon: str = None
+    ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self.feature_key = feature_key

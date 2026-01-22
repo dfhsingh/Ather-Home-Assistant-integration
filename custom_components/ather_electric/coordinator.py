@@ -30,6 +30,7 @@ class AtherCoordinator:
         firebase_token: str,
         api_key: str,
         device_name: str,
+        integration_version: str = "0.0.0",
     ) -> None:
         """Initialize the coordinator."""
         self.hass = hass
@@ -37,6 +38,8 @@ class AtherCoordinator:
         self.firebase_token = firebase_token
         self.api_key = api_key
         self.device_name = device_name
+        # Store integration version
+        self.integration_version = integration_version
         self.name = device_name
         self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
         self.data: Dict[str, Any] = {}
@@ -56,7 +59,7 @@ class AtherCoordinator:
         self.enable_raw_logging = False  # Will be updated from entry options
         self._runner_task: Optional[asyncio.Task] = None
         self._remove_stop_listener = None
-        
+
         # State tracking
         self._previous_state = None
 
@@ -64,7 +67,7 @@ class AtherCoordinator:
         """Start the coordinator background task."""
         if not self._runner_task:
             self._runner_task = self.hass.loop.create_task(self.connect())
-            
+
         if not self._remove_stop_listener:
             self._remove_stop_listener = self.hass.bus.async_listen(
                 EVENT_HOMEASSISTANT_STOP, self._handle_ha_stop
@@ -78,7 +81,7 @@ class AtherCoordinator:
     async def close(self) -> None:
         """Close the coordinator and WebSocket connection."""
         self._shutdown = True
-        
+
         # Cancel the runner task if active
         if self._runner_task and not self._runner_task.done():
             self._runner_task.cancel()
@@ -91,7 +94,7 @@ class AtherCoordinator:
         if self._remove_stop_listener:
             self._remove_stop_listener()
             self._remove_stop_listener = None
-        
+
         if self.ws and not self.ws.closed:
             await self.ws.close()
         _LOGGER.info("AtherCoordinator closed")
@@ -257,20 +260,55 @@ class AtherCoordinator:
 
         while not self._shutdown:
             if self.hass.is_stopping or (self.session and self.session.closed):
-                 _LOGGER.debug("Halting coordinator loop: HAS stopping or session closed")
-                 break
+                _LOGGER.debug(
+                    "Halting coordinator loop: HAS stopping or session closed"
+                )
+                break
 
             try:
                 id_token = await self.get_id_token()
                 if not id_token:
                     # If session is closed during token fetch, we should probably stop
                     if self.session and self.session.closed:
-                         break
+                        break
                     _LOGGER.error(
                         "Could not obtain ID token. Waiting 60s before retry."
                     )
                     await asyncio.sleep(60)
                     continue
+
+                # DEBUG: Fetch User ID and Scooter List to verify account/shard
+                try:
+                    _LOGGER.info("DEBUG: Fetching Profile and Scooter List...")
+                    uid = await self.api.get_user_id(id_token)
+                    if uid:
+                        scooters = await self.api.get_scooters(uid, id_token)
+                        _LOGGER.info("DEBUG: User ID: %s, Scooters: %s", uid, scooters)
+                except Exception as e:
+                    _LOGGER.error("DEBUG: Failed to fetch profile/scooters: %s", e)
+
+                # Fetch full state via HTTP to ensure initial freshness
+                # This helps if WebSocket sends stale cached data initially.
+                try:
+                    _LOGGER.info("Fetching full scooter state via HTTP...")
+                    full_data = await self.api.get_scooter_details(
+                        self.scooter_id, id_token
+                    )
+                    if full_data:
+                        _LOGGER.debug(
+                            "HTTP Fetch successful. Keys: %s", list(full_data.keys())
+                        )
+                        # Log details to check for shard info
+                        _LOGGER.info(
+                            "DEBUG: Scooter Details Metadata: %s",
+                            full_data.get("details"),
+                        )
+                        self._process_data(full_data)
+                        self._notify_listeners()
+                    else:
+                        _LOGGER.warning("HTTP Fetch returned no data.")
+                except Exception as httperr:
+                    _LOGGER.error("HTTP Fetch failed: %s", httperr)
 
                 async with self.session.ws_connect(WS_URL) as ws:
                     self.ws = ws
@@ -283,13 +321,16 @@ class AtherCoordinator:
                         "t": "d",
                         "d": {"r": 1, "a": "auth", "b": {"cred": id_token}},
                     }
+                    if _LOGGER.isEnabledFor(logging.DEBUG):
+                        _LOGGER.debug("Sending Auth Payload")
                     await ws.send_json(auth_payload)
 
                     # Subscriptions
                     paths = [
                         f"/scooters/{self.scooter_id}",
+                        f"/scooters/{self.scooter_id}/app",
                     ]
-                    
+
                     for idx, path in enumerate(paths, start=2):
                         _LOGGER.info(f"Subscribing to {path}")
                         sub_payload = {
@@ -309,19 +350,19 @@ class AtherCoordinator:
                         elif msg.type == aiohttp.WSMsgType.ERROR:
                             _LOGGER.error("WebSocket error: %s", msg.data)
                             break
-            
+
             except asyncio.CancelledError:
                 _LOGGER.info("WebSocket connection cancelled")
                 self._shutdown = True
                 break
             except RuntimeError as err:
-                 if "Session is closed" in str(err):
-                     _LOGGER.debug("Session closed, stopping coordinator loop")
-                     self._shutdown = True
-                     break
-                 _LOGGER.error("Runtime error in coordinator: %s", err)
-                 if not self._shutdown:
-                     await asyncio.sleep(10)
+                if "Session is closed" in str(err):
+                    _LOGGER.debug("Session closed, stopping coordinator loop")
+                    self._shutdown = True
+                    break
+                _LOGGER.error("Runtime error in coordinator: %s", err)
+                if not self._shutdown:
+                    await asyncio.sleep(10)
             except aiohttp.ClientError as err:
                 _LOGGER.error("WebSocket connection error: %s", err)
                 self.last_update_success = False
@@ -345,13 +386,50 @@ class AtherCoordinator:
                 )
 
             msg = json.loads(message)
+
+            # Debug logging for message structure
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                t_val = msg.get("t")
+                d_val = msg.get("d", {})
+                a_val = d_val.get("a") if isinstance(d_val, dict) else None
+
+                # Extract path if available
+                path_val = None
+                if isinstance(d_val, dict):
+                    b_val = d_val.get("b")
+                    if isinstance(b_val, dict):
+                        path_val = b_val.get("p")
+
+                _LOGGER.debug("RX Message: t=%s, a=%s, p=%s", t_val, a_val, path_val)
+
+                # If we have data, log its keys to see if it's app data
+                if isinstance(d_val, dict) and "b" in d_val:
+                    real_data = d_val["b"].get("d")
+                    if isinstance(real_data, dict):
+                        _LOGGER.debug("RX Data Keys: %s", list(real_data.keys()))
+
             if "t" in msg and msg["t"] == "d":
                 data = msg.get("d", {})
                 b_body = data.get("b", {})
 
+                # Check if it is a subscription response
+                if isinstance(data, dict):
+                    req_id = data.get("r")
+                    status = b_body.get("s")
+                    if req_id and status:
+                        if _LOGGER.isEnabledFor(logging.DEBUG):
+                            _LOGGER.debug(
+                                "Subscription Response: r=%s, status=%s", req_id, status
+                            )
+
                 if b_body and "d" in b_body:
                     real_data = b_body["d"]
                     self._process_data(real_data)
+                    self._notify_listeners()
+
+                # Also try processing the whole data object, in case 'b' is missing or structure is different
+                elif isinstance(data, dict):
+                    self._process_data(data)
                     self._notify_listeners()
 
         except Exception as err:
@@ -369,17 +447,191 @@ class AtherCoordinator:
             else:
                 target[key] = value
 
+    def _expand_collapsed_json(self, data: Any) -> Any:
+        """Expand keys with slashes into nested dictionaries (Firebase style)."""
+        if not isinstance(data, dict):
+            return data
+
+        expanded = {}
+        for k, v in data.items():
+            if isinstance(k, str) and "/" in k:
+                # Split path: "bike/batterySOC" -> ["bike", "batterySOC"]
+                parts = k.split("/")
+                current_level = expanded
+                for part in parts[:-1]:
+                    if part not in current_level:
+                        current_level[part] = {}
+
+                    # Ensure we can traverse
+                    if not isinstance(current_level[part], dict):
+                        # If we hit a scalar where we need a dict, overwrite it.
+                        current_level[part] = {}
+
+                    current_level = current_level[part]
+
+                # Set the leaf
+                last_part = parts[-1]
+                # Recursively expand the value too
+                leaf_value = self._expand_collapsed_json(v)
+
+                # Merge leaf if exists (careful with overwrite)
+                if (
+                    last_part in current_level
+                    and isinstance(current_level[last_part], dict)
+                    and isinstance(leaf_value, dict)
+                ):
+                    self._recursive_merge(current_level[last_part], leaf_value)
+                else:
+                    current_level[last_part] = leaf_value
+
+            else:
+                # Regular key
+                processed_v = self._expand_collapsed_json(v)
+
+                # Check for collision with expanded paths
+                if k in expanded:
+                    # If both are dicts, merge
+                    if isinstance(expanded[k], dict) and isinstance(processed_v, dict):
+                        self._recursive_merge(expanded[k], processed_v)
+                    else:
+                        # Overwrite (assuming strict order or simply last-write wins)
+                        expanded[k] = processed_v
+                else:
+                    expanded[k] = processed_v
+
+        return expanded
+
+    def _collect_data_candidates(
+        self, data: Any, candidates: list, parent_ts: Any = None
+    ) -> None:
+        """Recursively collect dictionaries that contain interesting data."""
+        if not isinstance(data, dict):
+            return
+
+        # If data doesn't have a timestamp but we have a parent timestamp, inject it for sorting
+        if "lastSyncedTime" not in data and parent_ts:
+            data["lastSyncedTime"] = parent_ts
+
+        INTERESTING_KEYS = [
+            "bike",
+            "trip",
+            "charging",
+            "app",
+            "navigation",
+            "subscription",
+            "stats",
+            "features",
+            "modeRange",
+        ]
+
+        # Check if this node is a candidate (contains any interesting key)
+        # We look for dicts that *contain* the keys, not the keys themselves as isolated values.
+        # But wait, if 'bike' is in data, then 'data' is the container/candidate.
+        # Yes.
+        is_candidate = False
+        for key in INTERESTING_KEYS:
+            if key in data:
+                is_candidate = True
+                break
+
+        if is_candidate:
+            candidates.append(data)
+
+        # Capture local timestamp if present to pass down
+        current_ts = data.get("lastSyncedTime") or parent_ts
+
+        # Recurse into children
+        for key, value in data.items():
+            if isinstance(value, dict):
+                self._collect_data_candidates(value, candidates, current_ts)
+
     def _process_data(self, data: Any):
         """Process and flatten data updates."""
         if not isinstance(data, dict):
             return
 
-        # 1. Update internal data structure recursively
+        # Pre-process: Expand any Firebase-style path keys (e.g. "prop/subprop": val)
+        # This ensures that patches are converted to nested dicts that our candidates search can find.
+        data = self._expand_collapsed_json(data)
+
+        # 0. Robust Data Extraction: Collect all potential data blocks and sort by timestamp
+        candidates = []
+
+        # Try to find a root-level timestamp to seed properly
+        root_ts = data.get("lastSyncedTime")
+        self._collect_data_candidates(data, candidates, root_ts)
+
+        # Sort candidates by lastSyncedTime (ascending).
+        # missing timestamp -> Current Time (assume it's a real-time live update).
+        # This ensures that live updates (which might lack a timestamp) are treated as NEWER
+        # than the stale cache (which has an old timestamp).
+        import time
+
+        now_ts = int(time.time() * 1000)
+
+        candidates.sort(key=lambda x: x.get("lastSyncedTime") or now_ts)
+
+        # Merge candidates in order
+        for c in candidates:
+            # Global Timestamp Guard
+            # If candidate has a timestamp, compare with stored timestamp.
+            c_ts = c.get("lastSyncedTime")
+            current_ts = self.data.get("lastSyncedTime")
+
+            # Only apply guard if BOTH have valid timestamps from the source.
+            # If c_ts is None (implied NOW), we skip the check and allow it to merge.
+            if c_ts and current_ts:
+                try:
+                    if int(c_ts) < int(current_ts):
+                        if _LOGGER.isEnabledFor(logging.DEBUG):
+                            _LOGGER.debug(
+                                "Ignoring stale candidate (ts=%s < current=%s)",
+                                c_ts,
+                                current_ts,
+                            )
+                        continue
+                except (ValueError, TypeError):
+                    pass
+
+            # We only merge the INTERESTING keys from the candidate, plus lastSyncedTime
+            # to avoid merging irrelevant structural keys.
+
+            INTERESTING_KEYS = [
+                "bike",
+                "trip",
+                "charging",
+                "app",
+                "navigation",
+                "subscription",
+                "stats",
+                "features",
+                "modeRange",
+                "lastSyncedTime",
+            ]
+
+            subset = {}
+            for k in INTERESTING_KEYS:
+                if k in c:
+                    subset[k] = c[k]
+
+            if subset:
+                if _LOGGER.isEnabledFor(logging.DEBUG):
+                    _LOGGER.debug(
+                        "Merging Candidate (ts=%s): keys=%s",
+                        c.get("lastSyncedTime"),
+                        list(subset.keys()),
+                    )
+                self._recursive_merge(self.data, subset)
+
+        # 1. Update internal data structure recursively with the root data as well
+        # (This catches anything at the very root that might not have been captured if root wasn't a candidate,
+        # though if root has interesting keys it WAS a candidate and already merged.
+        # Repeated merge is harmless but let's keep it for safety for non-candidate keys?)
         self._recursive_merge(self.data, data)
 
         # 2. Flatten helpful keys into self.data for easy sensor access (Backwards Compatibility)
         # Many sensors expect keys at the root level (e.g., 'batterySOC', 'speed')
-        
+
         # Helper to flatten specific keys from a source dict to root
         def flatten_keys(source: Dict[str, Any], keys: list):
             for k in keys:
@@ -389,36 +641,53 @@ class AtherCoordinator:
         # Flatten 'bike' fields
         bike = self.data.get("bike", {})
         if bike:
-             flatten_keys(bike, [
-                "batterySOC", "predictedRange", "range", "speed", "mode",
-                "keySwitch", "VIN", "odo", "bikeType", "otaStatus",
-                "TheftTowMovementState", "vehicleState", "ShutdownVacationMode",
-                "parkingAssist", "UserFacingSoftwareVersion"
-            ])
-             if "GPSLocation" in bike:
-                 self._update_gps(bike["GPSLocation"])
+            flatten_keys(
+                bike,
+                [
+                    "batterySOC",
+                    "predictedRange",
+                    "range",
+                    "speed",
+                    "mode",
+                    "keySwitch",
+                    "VIN",
+                    "odo",
+                    "bikeType",
+                    "otaStatus",
+                    "TheftTowMovementState",
+                    "vehicleState",
+                    "ShutdownVacationMode",
+                    "parkingAssist",
+                    "UserFacingSoftwareVersion",
+                ],
+            )
+            if "GPSLocation" in bike:
+                self._update_gps(bike["GPSLocation"])
 
         # Flatten 'charging' to root if present (sometimes comes as separate object)
         if "charging" in data:
             # We already merged it into self.data['charging'] via recursive merge
             # Check if any sensors need something specific? No, they use get_data('charging')
             pass
-        
+
         # Flatten 'app' fields
         app = self.data.get("app", {})
         if app:
             flatten_keys(app, ["modeRange", "features", "savings"])
-            
+
         # Check if 'features' is now at root (from app flattening or direct) and flatten feature flags
         if "features" in self.data:
-            flatten_keys(self.data["features"], [
-                "atherStackPingMyScooter", 
-                "atherStackRemoteShutdown", 
-                "atherStackRemoteCharging"
-            ])
+            flatten_keys(
+                self.data["features"],
+                [
+                    "atherStackPingMyScooter",
+                    "atherStackRemoteShutdown",
+                    "atherStackRemoteCharging",
+                ],
+            )
             # Signal ready if we have the critical flags
             if "atherStackPingMyScooter" in self.data:
-                 self._ready_event.set()
+                self._ready_event.set()
 
         # Flatten 'trip' fields
         if "trip" in data:
@@ -428,12 +697,21 @@ class AtherCoordinator:
             if "lastSyncedTime" in self.data:
                 current_trip["timestamp"] = self.data["lastSyncedTime"]
             self.data["current_trip"] = current_trip
-            
+
+            flatten_keys(trip, ["tripA", "tripB"])
+
+        # Also check self.data['trip'] because deep_extract might have put it there
+        elif "trip" in self.data:
+            trip = self.data["trip"]
+            current_trip = trip.copy()
+            if "lastSyncedTime" in self.data:
+                current_trip["timestamp"] = self.data["lastSyncedTime"]
+            self.data["current_trip"] = current_trip
             flatten_keys(trip, ["tripA", "tripB"])
 
         # Flatten 'navigation'
-        if "navigation" in data:
-            nav = data["navigation"]
+        if "navigation" in self.data:  # Use self.data instead of just incoming data
+            nav = self.data["navigation"]
             self.data["navigation_status"] = nav.get("status")
             self.data["navigation_trip_plan"] = nav.get("tripPlan")
             dest = nav.get("destination", {})
@@ -442,8 +720,8 @@ class AtherCoordinator:
                 self.data["navigation_arrival_time"] = dest.get("time")
 
         # Flatten 'subscription'
-        if "subscription" in data:
-            sub = data["subscription"]
+        if "subscription" in self.data:
+            sub = self.data["subscription"]
             connect_plan = sub.get("connect", {})
             self.data["subscription_status"] = connect_plan.get("status")
             self.data["subscription_plan"] = connect_plan.get("plan")
@@ -459,7 +737,7 @@ class AtherCoordinator:
                 # This seems specific to how previous logic interpreted some messages.
                 # If we assume 'data' is the 'b.d' payload, it might be a flat dict with slash keys.
                 # Let's support it by expanding it into the structure.
-                
+
                 # We can use a helper to set nested item by path
                 d = self.data
                 for part in parts[:-1]:
@@ -467,41 +745,67 @@ class AtherCoordinator:
                         d[part] = {}
                     d = d[part]
                 d[parts[-1]] = value
-                
+
                 # Also do the specific flattening if it matches our interested keys
                 # (This mimics the previous massive if-else block but genericaly)
                 category = parts[0]
                 field = parts[-1]
-                
+
                 if category == "bike" and field in [
-                    "mode", "speed", "batterySOC", "predictedRange", "range", 
-                    "keySwitch", "odo", "VIN", "bikeType", "otaStatus", 
-                    "TheftTowMovementState", "vehicleState", "ShutdownVacationMode", 
-                    "parkingAssist", "UserFacingSoftwareVersion"
+                    "mode",
+                    "speed",
+                    "batterySOC",
+                    "predictedRange",
+                    "range",
+                    "keySwitch",
+                    "odo",
+                    "VIN",
+                    "bikeType",
+                    "otaStatus",
+                    "TheftTowMovementState",
+                    "vehicleState",
+                    "ShutdownVacationMode",
+                    "parkingAssist",
+                    "UserFacingSoftwareVersion",
                 ]:
                     self.data[field] = value
-                
+
                 if category == "app" and field in ["modeRange", "features", "savings"]:
-                     self.data[field] = value
-                
+                    self.data[field] = value
+
                 # Trigger ready event if important data arrived
                 if field in ["features", "modeRange"]:
-                     self._ready_event.set()
+                    self._ready_event.set()
 
         # Handle root level keys that might be direct updates
-        flatten_keys(data, [
-            "batterySOC", "predictedRange", "speed", "mode", "lastSyncedTime"
-        ])
-        
+        flatten_keys(
+            data, ["batterySOC", "predictedRange", "speed", "mode", "lastSyncedTime"]
+        )
+
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "Post-Process Data Check: batterySOC=%s, speed=%s, odo=%s, lastSyncedTime=%s",
+                self.data.get("batterySOC"),
+                self.data.get("speed"),
+                self.data.get("odo"),
+                self.data.get("lastSyncedTime"),
+            )
+
         if "GPSLocation" in data:
             self._update_gps(data["GPSLocation"])
-            
+
         if "tripSummary" in data.get("stats", {}):
             self.data["tripSummary"] = data["stats"]["tripSummary"]
-        elif "stats" in data and "tripSummary" in data["stats"]: # Handle if stats came in
-             pass # recursive merge handled it, just ensure data['tripSummary'] exists if accessed directly?
-             # Previous code put tripSummary at root.
-             self.data["tripSummary"] = self.data.get("stats", {}).get("tripSummary")
+        elif (
+            "stats" in data and "tripSummary" in data["stats"]
+        ):  # Handle if stats came in
+            pass  # recursive merge handled it, just ensure data['tripSummary'] exists if accessed directly?
+            # Previous code put tripSummary at root.
+            self.data["tripSummary"] = self.data.get("stats", {}).get("tripSummary")
+
+        # Check if deep_extract found stats/tripSummary
+        if "stats" in self.data and "tripSummary" in self.data["stats"]:
+            self.data["tripSummary"] = self.data["stats"]["tripSummary"]
 
         # Capture Trip Start SOC
         current_state = self.data.get("vehicleState")
@@ -509,40 +813,71 @@ class AtherCoordinator:
 
         # Trip Logic: Robust Capture & Reset
         try:
-             speed = float(self.data.get("speed", 0))
+            speed = float(self.data.get("speed", 0))
         except (ValueError, TypeError):
-             speed = 0
-             
-        try:
-             trip_dist = float(self.data.get("distance", 0))
-             # Fallback if distance is not at root
-             if trip_dist == 0:
-                 trip_dist = float(self.data.get("current_trip", {}).get("distance", 0))
-        except (ValueError, TypeError):
-             trip_dist = 0
+            speed = 0
 
-        # 1. Reset if trip distance is 0 (Ready for new trip)
-        if trip_dist < 0.1:
-             if self.data.get("trip_start_soc") is not None:
-                 _LOGGER.debug("Trip reset detected (dist=0). Clearing start values.")
-                 self.data["trip_start_soc"] = None
-                 self.data["trip_start_altitude"] = None
-        
-        # 2. Lazy Capture: If moving or riding, and haven't captured yet
-        # We rely on previous_state transition OR simple existence of motion/distance
-        is_moving = speed > 0 or trip_dist > 0 or current_state == "riding"
-        has_captured = self.data.get("trip_start_soc") is not None
-        
-        if is_moving and not has_captured:
+        try:
+            trip_dist = float(self.data.get("distance", 0))
+            # Fallback if distance is not at root
+            if trip_dist == 0:
+                trip_dist = float(self.data.get("current_trip", {}).get("distance", 0))
+        except (ValueError, TypeError):
+            trip_dist = 0
+
+        # Trip Logic: Robust Capture based on State Transition
+        # Analysis confirms 'riding' is always preceded by 'standby'
+
+        # Detect Transition to Riding
+        # Triggers when we enter 'riding' from any other state (usually 'standby')
+        # Also handles the case where we start the integration while already 'riding' (previous known state None)
+        if current_state == "riding" and self._previous_state != "riding":
+            # Determine if we should capture start values
+            # If previous_state is None (startup), we capture current values as best-effort start points
+            # If previous_state was 'standby', this is a genuine new ride start
+
+            _LOGGER.debug(
+                "Trip Start Detected (State Transition: %s -> %s). Capturing Start Data.",
+                self._previous_state,
+                current_state,
+            )
+
             if current_soc is not None:
                 self.data["trip_start_soc"] = current_soc
-                _LOGGER.debug("Trip started (Lazy). Captured SOC: %s, Speed: %s, Dist: %s", current_soc, speed, trip_dist)
-            
+
             current_altitude = self.data.get("altitude")
             if current_altitude is not None:
                 self.data["trip_start_altitude"] = current_altitude
-                _LOGGER.debug("Trip started (Lazy). Captured Altitude: %s", current_altitude)
-        
+
+        # Legacy/Fallback: If we somehow missed the transition but are moving and have no data
+        # This helps if we didn't get the specific 'riding' packet but assume riding based on speed
+        # However, with robust state logic, this is less critical, but good for safety.
+        # We only do this if we are definitively moving but have no start data.
+        if (
+            (speed > 5 or trip_dist > 0.1)
+            and self.data.get("trip_start_soc") is None
+            and current_state == "riding"
+        ):
+            if current_soc is not None:
+                self.data["trip_start_soc"] = current_soc
+                _LOGGER.debug(
+                    "Trip Start (Fallback): Captured SOC due to movement without existing data."
+                )
+
+        # Reset Logic: If Trip Distance resets to 0, implies manual trip reset or new logical trip A/B cycle
+        # We clear the start data to allow fresh capture if needed, though the transition logic above handles overwrites.
+        if (
+            trip_dist < 0.1
+            and self.data.get("trip_start_soc") is not None
+            and current_state != "riding"
+        ):
+            # Only clear if NOT riding to avoid clearing valid data during a very short stop/start glitch
+            _LOGGER.debug(
+                "Trip Distance is 0 and not riding. Clearing trip start data."
+            )
+            self.data["trip_start_soc"] = None
+            self.data["trip_start_altitude"] = None
+
         self._previous_state = current_state
 
     def _update_gps(self, gps_data):

@@ -45,7 +45,7 @@ class AtherAPI:
                     return True
                 _LOGGER.error("Generate OTP failed: %s", await resp.text())
         except RuntimeError:
-             return False
+            return False
         except Exception as e:
             _LOGGER.error("Error generating OTP: %s", e)
         return False
@@ -92,13 +92,44 @@ class AtherAPI:
                     return data.get("idToken")
                 _LOGGER.error("Token Exchange failed: %s", await resp.text())
         except RuntimeError:
-             return None
+            return None
         except Exception as e:
             _LOGGER.error("Error exchanging token: %s", e)
         return None
 
+    def get_user_id_from_token(self, token: str) -> str | None:
+        """Decode JWT token to get user_id without API call."""
+        try:
+            # JWT format: header.payload.signature
+            parts = token.split(".")
+            if len(parts) < 2:
+                return None
+
+            # Base64 decode payload (add padding if needed)
+            payload_b64 = parts[1]
+            padding = "=" * (4 - (len(payload_b64) % 4))
+            payload_b64 += padding
+
+            import base64
+
+            payload_bytes = base64.urlsafe_b64decode(payload_b64)
+            payload_str = payload_bytes.decode("utf-8")
+            payload = json.loads(payload_str)
+
+            # Look for user_id or sub
+            return payload.get("user_id") or payload.get("sub")
+        except Exception as e:
+            _LOGGER.error("Error decoding token: %s", e)
+            return None
+
     async def get_user_id(self, token: str) -> str | None:
         """Fetch User ID from Profile."""
+        # Try local decode first
+        uid = self.get_user_id_from_token(token)
+        if uid:
+            _LOGGER.debug("Decoded User ID from token: %s", uid)
+            return uid
+
         if self._session.closed:
             return None
         headers = COMMON_HEADERS.copy()
@@ -109,6 +140,7 @@ class AtherAPI:
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
+                    _LOGGER.debug("Profile Data: %s", data)
                     return str(data.get("id"))
                 _LOGGER.error("Get Profile failed: %s", await resp.text())
         except RuntimeError:
@@ -126,6 +158,7 @@ class AtherAPI:
             async with self._session.get(url, timeout=DEFAULT_TIMEOUT) as resp:
                 if resp.status == 200:
                     data = await resp.json()
+                    _LOGGER.debug("Scooters Data: %s", data)
                     if data:
                         return list(data.keys())
                     return []
