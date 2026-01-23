@@ -65,6 +65,9 @@ class AtherCoordinator:
         # State tracking
         self._previous_state = None
 
+        # WebSocket URL management
+        self.current_ws_url = WS_URL
+
     def start(self) -> None:
         """Start the coordinator background task."""
         if not self._runner_task:
@@ -312,7 +315,7 @@ class AtherCoordinator:
                 except Exception as httperr:
                     _LOGGER.error("HTTP Fetch failed: %s", httperr)
 
-                async with self.session.ws_connect(WS_URL) as ws:
+                async with self.session.ws_connect(self.current_ws_url) as ws:
                     self.ws = ws
                     _LOGGER.info("Connected to Ather WebSocket")
                     self.last_update_success = True
@@ -409,6 +412,34 @@ class AtherCoordinator:
                     real_data = d_val["b"].get("d")
                     if isinstance(real_data, dict):
                         _LOGGER.debug("RX Data Keys: %s", list(real_data.keys()))
+
+            if "t" in msg:
+                # Handle Control Messages (Redirects)
+                if msg["t"] == "c":
+                    d_data = msg.get("d", {})
+                    if d_data.get("t") == "h":  # Handshake/Host redirect
+                        d_inner = d_data.get("d", {})
+                        new_host = d_inner.get("h")
+
+                        if new_host:
+                            new_url = f"wss://{new_host}/.ws?v=5"
+                            # Append namespace (ns) parameter as we are connecting to a generic shard
+                            # Namespace is usually the subdomain of the original URL (ather-production-mu)
+                            new_url += "&ns=ather-production-mu"
+
+                            if new_url != self.current_ws_url:
+                                _LOGGER.info(
+                                    "Received Redirect: Switching from %s to %s",
+                                    self.current_ws_url,
+                                    new_url,
+                                )
+                                self.current_ws_url = new_url
+                                # Close current connection to force reconnect with new URL
+                                if self.ws and not self.ws.closed:
+                                    await self.ws.close()
+                                return
+                            else:
+                                _LOGGER.debug("Redirect URL is same as current.")
 
             if "t" in msg and msg["t"] == "d":
                 data = msg.get("d", {})
