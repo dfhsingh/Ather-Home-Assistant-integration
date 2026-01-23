@@ -13,6 +13,8 @@ import aiohttp
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant, Event
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.util import dt as dt_util
+import datetime
 
 from .api import AtherAPI
 from .const import WS_URL, DOMAIN, CONF_ENABLE_RAW_LOGGING, DEFAULT_ENABLE_RAW_LOGGING
@@ -554,8 +556,29 @@ class AtherCoordinator:
         # This ensures that patches are converted to nested dicts that our candidates search can find.
         data = self._expand_collapsed_json(data)
 
-        # 0. Robust Data Extraction: Collect all potential data blocks and sort by timestamp
         candidates = []
+
+        # Sanity Check: If entire packet is too old, drop it.
+        # Check 'updatedAt' field (ISO 8601 string)
+        updated_at_str = data.get("updatedAt")
+        if updated_at_str:
+            try:
+                # "2026-01-20T01:17:23.504Z"
+                updated_at = dt_util.parse_datetime(updated_at_str)
+                if updated_at:
+                    now = dt_util.now()
+                    diff = now - updated_at
+                    if diff > datetime.timedelta(hours=5):
+                        _LOGGER.warning(
+                            "Ignoring stale data (updatedAt: %s, age: %s)",
+                            updated_at_str,
+                            diff,
+                        )
+                        return
+            except Exception as e:
+                _LOGGER.warning("Failed to parse updatedAt: %s", e)
+
+        # 0. Robust Data Extraction: Collect all potential data blocks and sort by timestamp
 
         # Try to find a root-level timestamp to seed properly
         root_ts = data.get("lastSyncedTime")

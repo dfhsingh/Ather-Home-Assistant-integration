@@ -145,6 +145,15 @@ class AtherSensor(SensorEntity):
             sw_version=f"{coordinator.get_data('UserFacingSoftwareVersion')} (v{coordinator.integration_version})",
         )
 
+    @property
+    def extra_state_attributes(self) -> dict[str, any]:
+        """Return attributes."""
+        attrs = {}
+        updated_at = self.coordinator.get_data("updatedAt")
+        if updated_at:
+            attrs["updated_at"] = updated_at
+        return attrs
+
     async def async_added_to_hass(self) -> None:
         """Run when this Entity has been added to HA."""
         self.coordinator.async_add_listener(self.async_write_ha_state)
@@ -255,6 +264,8 @@ class AtherVinSensor(AtherSensor):
     _attr_name = "VIN"
     _attr_icon = "mdi:card-account-details"
 
+    _attr_entity_registry_enabled_default = False
+
     @property
     def unique_id(self) -> str:
         return f"ather_{self.coordinator.scooter_id}_vin"
@@ -269,7 +280,9 @@ class AtherBikeTypeSensor(AtherSensor):
     """Representation of the Bike Type sensor."""
 
     _attr_name = "Bike Type"
-    _attr_icon = "mdi:scooter"
+    _attr_icon = "mdi:moped-electric"
+
+    _attr_entity_registry_enabled_default = False
 
     @property
     def unique_id(self) -> str:
@@ -375,6 +388,8 @@ class AtherAltitudeSensor(AtherSensor):
     _attr_name = "Altitude"
     _attr_icon = "mdi:altimeter"
 
+    _attr_entity_registry_enabled_default = False
+
     @property
     def unique_id(self) -> str:
         return f"ather_{self.coordinator.scooter_id}_altitude"
@@ -476,6 +491,9 @@ class AtherNavigationStateSensor(AtherSensor):
 
     _attr_name = "Navigation Status"
     _attr_icon = "mdi:map-marker-path"
+    _attr_icon = "mdi:map-marker-path"
+
+    _attr_entity_registry_enabled_default = False
 
     @property
     def unique_id(self) -> str:
@@ -488,10 +506,14 @@ class AtherNavigationStateSensor(AtherSensor):
     @property
     def extra_state_attributes(self) -> dict[str, any]:
         """Return attributes."""
-        return {
-            "destination": self.coordinator.get_data("navigation_title"),
-            "trip_plan": self.coordinator.get_data("navigation_trip_plan"),
-        }
+        attrs = super().extra_state_attributes
+        attrs.update(
+            {
+                "destination": self.coordinator.get_data("navigation_title"),
+                "trip_plan": self.coordinator.get_data("navigation_trip_plan"),
+            }
+        )
+        return attrs
 
 
 class AtherSubscriptionStatusSensor(AtherSensor):
@@ -511,9 +533,13 @@ class AtherSubscriptionStatusSensor(AtherSensor):
     @property
     def extra_state_attributes(self) -> dict[str, any]:
         """Return attributes."""
-        return {
-            "plan": self.coordinator.get_data("subscription_plan"),
-        }
+        attrs = super().extra_state_attributes
+        attrs.update(
+            {
+                "plan": self.coordinator.get_data("subscription_plan"),
+            }
+        )
+        return attrs
 
 
 class AtherTimeRemainingSensor(AtherSensor):
@@ -558,7 +584,7 @@ class AtherVehicleStateSensor(AtherSensor):
     """Representation of the Vehicle State sensor."""
 
     _attr_name = "Vehicle State"
-    _attr_icon = "mdi:scooter"
+    _attr_icon = "mdi:moped-electric"
 
     @property
     def unique_id(self) -> str:
@@ -575,6 +601,8 @@ class AtherChargerTypeSensor(AtherSensor):
     _attr_name = "Charger Type"
     _attr_icon = "mdi:ev-plug-type2"
 
+    _attr_entity_registry_enabled_default = False
+
     @property
     def unique_id(self) -> str:
         return f"ather_{self.coordinator.scooter_id}_charger_type"
@@ -590,6 +618,8 @@ class AtherSoftwareVersionSensor(AtherSensor):
 
     _attr_name = "Software Version"
     _attr_icon = "mdi:cellphone-arrow-down"
+
+    _attr_entity_registry_enabled_default = False
 
     @property
     def unique_id(self) -> str:
@@ -648,12 +678,16 @@ class AtherRemoteShutdownSensor(AtherSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, any]:
+        attrs = super().extra_state_attributes
         data = self.coordinator.get_data("remote_shutdown", {})
-        return {
-            "error": data.get("error"),
-            "request_id": data.get("request_id"),
-            "timestamp": data.get("timestamp"),
-        }
+        attrs.update(
+            {
+                "error": data.get("error"),
+                "request_id": data.get("request_id"),
+                "timestamp": data.get("timestamp"),
+            }
+        )
+        return attrs
 
 
 class AtherProjectedRangeSensor(AtherSensor):
@@ -714,12 +748,16 @@ class AtherServiceSensor(AtherSensor):
     @property
     def extra_state_attributes(self) -> dict[str, any]:
         """Return attributes."""
+        attrs = super().extra_state_attributes
         service = self.coordinator.get_data("vehicle_service", {})
-        return {
-            "advisor_contact": service.get("serviceAdvisorContactNumber"),
-            "paid_amount": service.get("paidAmount"),
-            "status": service.get("status"),
-        }
+        attrs.update(
+            {
+                "advisor_contact": service.get("serviceAdvisorContactNumber"),
+                "paid_amount": service.get("paidAmount"),
+                "status": service.get("status"),
+            }
+        )
+        return attrs
 
 
 class AtherWarrantySensor(AtherSensor):
@@ -793,8 +831,8 @@ class AtherCurrentTripSensor(AtherSensor):
     @property
     def extra_state_attributes(self) -> dict[str, any]:
         """Return attributes."""
+        attrs = super().extra_state_attributes
         data = self.current_trip_data
-        attrs = {}
         if "timestamp" in data:
             # Add timestamp as attribute for tracking unique trips
             attrs["last_synced"] = data["timestamp"]
@@ -858,6 +896,9 @@ class AtherCurrentTripStateSensor(AtherCurrentTripSensor):
 
     _attr_name = "Current Trip State"
     _attr_icon = "mdi:map-marker-path"
+    _attr_icon = "mdi:map-marker-path"
+
+    _attr_entity_registry_enabled_default = False
 
     @property
     def unique_id(self) -> str:
@@ -951,6 +992,8 @@ class AtherNavigationTimeSensor(AtherSensor):
     _attr_name = "Estimated Arrival"
     _attr_icon = "mdi:clock-end"
 
+    _attr_entity_registry_enabled_default = False
+
     @property
     def unique_id(self) -> str:
         return f"ather_{self.coordinator.scooter_id}_nav_arrival"
@@ -1002,6 +1045,8 @@ class AtherChargingCreditsSensor(AtherSensor):
 
 class AtherDiagnosticSensor(AtherSensor):
     """General diagnostic sensor for scooter properties."""
+
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator, name: str, property_key: str, icon: str) -> None:
         """Initialize."""

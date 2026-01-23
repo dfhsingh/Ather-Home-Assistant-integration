@@ -138,6 +138,15 @@ class AtherBinarySensor(BinarySensorEntity):
         """Run when this Entity has been added to HA."""
         self.coordinator.async_add_listener(self.async_write_ha_state)
 
+    @property
+    def extra_state_attributes(self) -> dict[str, any]:
+        """Return attributes."""
+        attrs = {}
+        updated_at = self.coordinator.get_data("updatedAt")
+        if updated_at:
+            attrs["updated_at"] = updated_at
+        return attrs
+
 
 class AtherChargingSensor(AtherBinarySensor):
     """Representation of the Charging status."""
@@ -191,6 +200,10 @@ class AtherChargingPredictionSensor(AtherBinarySensor):
     """Representation of Charging Prediction (Smart Charge)."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    _attr_entity_registry_enabled_default = False
+
     _attr_name = "Charging Prediction"
     _attr_icon = "mdi:battery-charging-high"
 
@@ -232,6 +245,8 @@ class AtherVacationModeSensor(AtherBinarySensor):
 
     _attr_device_class = BinarySensorDeviceClass.POWER
     _attr_name = "Vacation Mode"
+
+    _attr_entity_registry_enabled_default = False
 
     @property
     def unique_id(self) -> str:
@@ -285,6 +300,9 @@ class AtherFeatureBinarySensor(AtherBinarySensor):
     """Representation of a generic feature flag (Diagnostic)."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    _attr_entity_registry_enabled_default = False
 
     def __init__(
         self, coordinator, feature_key: str, name: str, icon: str = None
@@ -326,6 +344,8 @@ class AtherIncognitoSensor(AtherBinarySensor):
     _attr_name = "Incognito Mode"
     _attr_icon = "mdi:incognito"
 
+    _attr_entity_registry_enabled_default = False
+
     @property
     def unique_id(self) -> str:
         return f"ather_{self.coordinator.scooter_id}_incognito"
@@ -342,6 +362,9 @@ class AtherPropertyBinarySensor(AtherBinarySensor):
     """Binary sensor for hardware properties (bt, etc)."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    _attr_entity_registry_enabled_default = False
 
     def __init__(
         self, coordinator, name: str, property_key: str, icon: str = None
