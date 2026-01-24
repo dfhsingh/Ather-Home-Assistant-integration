@@ -29,6 +29,7 @@ async def async_setup_entry(
         AtherChargingPredictionSensor(coordinator),
         AtherChargingHeartbeatSensor(coordinator),
         AtherVacationModeSensor(coordinator),
+        AtherSmartEcoStatusSensor(coordinator),
         # Active Status Sensors
         AtherParkingAssistStatusSensor(coordinator),
         AtherCruiseControlStatusSensor(coordinator),
@@ -208,7 +209,6 @@ class AtherChargingPredictionSensor(AtherBinarySensor):
     """Representation of Charging Prediction (Smart Charge)."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     _attr_entity_registry_enabled_default = False
 
@@ -268,6 +268,28 @@ class AtherVacationModeSensor(AtherBinarySensor):
         return safe_bool(val)
 
 
+
+class AtherSmartEcoStatusSensor(AtherBinarySensor):
+    """Representation of the Smart Eco Status."""
+
+    _attr_device_class = BinarySensorDeviceClass.POWER
+    _attr_name = "Smart Eco Status"
+    _attr_icon = "mdi:leaf"
+
+    _attr_entity_registry_enabled_default = False
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_smart_eco_status"
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return true if Smart Eco is active."""
+        # Log: "smartEcoStatus": "On" (in bike dict)
+        val = self.coordinator.get_data("smartEcoStatus")
+        return safe_bool(val)
+
+
 class AtherParkingAssistStatusSensor(AtherBinarySensor):
     """Representation of the Parking Assist status (Active)."""
 
@@ -307,7 +329,6 @@ class AtherCruiseControlStatusSensor(AtherBinarySensor):
 class AtherFeatureBinarySensor(AtherBinarySensor):
     """Representation of a generic feature flag (Diagnostic)."""
 
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     _attr_entity_registry_enabled_default = False
@@ -369,7 +390,6 @@ class AtherIncognitoSensor(AtherBinarySensor):
 class AtherPropertyBinarySensor(AtherBinarySensor):
     """Binary sensor for hardware properties (bt, etc)."""
 
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     _attr_entity_registry_enabled_default = False

@@ -64,6 +64,7 @@ async def async_setup_entry(
         ),
         AtherAltitudeSensor(coordinator),
         AtherTheftMovementSensor(coordinator),
+        AtherSmartChargingSensor(coordinator),
         # New Sensors
         AtherTripDistanceSensor(coordinator, "A"),
         AtherTripDistanceSensor(coordinator, "B"),
@@ -499,7 +500,6 @@ class AtherNavigationStateSensor(AtherSensor):
 
     _attr_name = "Navigation Status"
     _attr_icon = "mdi:map-marker-path"
-    _attr_icon = "mdi:map-marker-path"
 
     _attr_entity_registry_enabled_default = False
 
@@ -726,12 +726,32 @@ class AtherProjectedRangeSensor(AtherSensor):
         return None
 
 
+class AtherSmartChargingSensor(AtherSensor):
+    """Representation of Smart Charging Setting."""
+
+    _attr_name = "Smart Charging Setting"
+    _attr_icon = "mdi:battery-sync"
+    _attr_entity_registry_enabled_default = False
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_smart_charging_setting"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the state of the sensor."""
+        # charging -> SmartChargingSetting: "Off"
+        charging = self.coordinator.get_data("charging", {})
+        return charging.get("SmartChargingSetting")
+
+
 class AtherServiceSensor(AtherSensor):
     """Representation of the Last Service Date sensor."""
 
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_name = "Last Service Date"
     _attr_icon = "mdi:calendar-check"
+    _attr_entity_registry_enabled_default = False
 
     @property
     def unique_id(self) -> str:
@@ -770,6 +790,8 @@ class AtherServiceSensor(AtherSensor):
 
 class AtherWarrantySensor(AtherSensor):
     """Representation of Warranty Information."""
+
+    _attr_entity_registry_enabled_default = False
 
     def __init__(
         self, coordinator, item: str, key: str, name: str, device_class=None

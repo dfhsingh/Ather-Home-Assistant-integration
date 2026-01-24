@@ -17,9 +17,15 @@ from homeassistant.util import dt as dt_util
 import datetime
 
 from .api import AtherAPI
-from .const import WS_URL, DOMAIN, CONF_ENABLE_RAW_LOGGING, DEFAULT_ENABLE_RAW_LOGGING
+from .const import (
+    WS_URL,
+    DOMAIN,
+    CONF_ENABLE_RAW_LOGGING,
+    DEFAULT_ENABLE_RAW_LOGGING,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
 
 
 class AtherCoordinator:
@@ -36,11 +42,11 @@ class AtherCoordinator:
     ) -> None:
         """Initialize the coordinator."""
         self.hass = hass
+        # ... (other init params)
         self.scooter_id = scooter_id
         self.firebase_token = firebase_token
         self.api_key = api_key
         self.device_name = device_name
-        # Store integration version
         self.integration_version = integration_version
         self.name = device_name
         self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
@@ -49,11 +55,15 @@ class AtherCoordinator:
         self.session = async_get_clientsession(hass)
         self.api = AtherAPI(self.session)
         self._shutdown = False
-        self.shutdown_safe_mode = True  # Default to Safe Mode ON
-        self.last_update_success = False  # For CoordinatorEntity compatibility
+        self.shutdown_safe_mode = True
+        self.last_update_success = False
+
+        # Reconnection Flag
+        self._reconnect_requested = False
 
         # Token Management
         self.refresh_token: Optional[str] = None
+# ... (rest of init)
         self.token_file = hass.config.path(".ather_tokens.json")
         self._ready_event = asyncio.Event()
 
@@ -73,6 +83,7 @@ class AtherCoordinator:
 
         # WebSocket URL management
         self.current_ws_url = WS_URL
+        self._consecutive_failures = 0
 
     def start(self) -> None:
         """Start the coordinator background task."""
@@ -351,13 +362,32 @@ class AtherCoordinator:
                 except Exception as httperr:
                     _LOGGER.error("HTTP Fetch failed: %s", httperr)
 
-                async with self.session.ws_connect(self.current_ws_url) as ws:
+                # Simulate Android Client to avoid potential blocking
+                ws_headers = {
+                    "User-Agent": "okhttp/4.9.3" 
+                }
+
+                # Add receive_timeout to detect silent/hanging servers
+                async with self.session.ws_connect(
+                    self.current_ws_url, 
+                    headers=ws_headers, 
+
+                    receive_timeout=60
+                ) as ws:
                     self.ws = ws
                     _LOGGER.info("Connected to Ather WebSocket")
                     # Successful connection, reset backoff
                     self._backoff_delay = 10
                     self.last_update_success = True
+                    self._reconnect_requested = False  # Reset flag on new connection
+                    self._consecutive_failures = 0 # connection successful
                     self._notify_listeners()
+
+                    # Stabilization delay to avoid immediate closure race conditions
+                    await asyncio.sleep(0.5)
+                    if ws.closed:
+                        _LOGGER.warning("WebSocket closed immediately after connection.")
+                        continue
 
                     # Authenticate
                     auth_payload = {
@@ -366,7 +396,21 @@ class AtherCoordinator:
                     }
                     if _LOGGER.isEnabledFor(logging.DEBUG):
                         _LOGGER.debug("Sending Auth Payload")
-                    await ws.send_json(auth_payload)
+                    
+                    if ws.closed:
+                         _LOGGER.warning("WebSocket closed before Auth.")
+                         continue
+
+                    try:
+                        async with asyncio.timeout(5):
+                            await ws.send_json(auth_payload)
+                    except TimeoutError:
+                         _LOGGER.warning("Timeout sending Auth Payload. Resetting URL.")
+                         self.current_ws_url = WS_URL
+                         self._consecutive_failures = 0
+                         continue
+
+                    _LOGGER.debug("Auth Payload Sent. Entering message loop.")
 
                     # Subscriptions
                     paths = [
@@ -380,16 +424,23 @@ class AtherCoordinator:
                             "t": "d",
                             "d": {"r": idx, "a": "q", "b": {"p": path, "h": ""}},
                         }
-                        await ws.send_json(sub_payload)
-
-                    # Mark as ready - REMOVED: Waiting for actual data in _process_data
-                    # self._ready_event.set()
+                        try:
+                            async with asyncio.timeout(5):
+                                await ws.send_json(sub_payload)
+                        except TimeoutError:
+                             _LOGGER.warning("Timeout sending Subscription. Resetting URL.")
+                             self.current_ws_url = WS_URL
+                             self._consecutive_failures = 0
+                             break # Break inner loop to trigger outer loop continue/retry logic
 
                     async for msg in ws:
                         if self._shutdown or self.hass.is_stopping:
                             break
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             await self._handle_message(msg.data)
+                            if self._reconnect_requested:
+                                _LOGGER.info("Redirect requested, closing current connection.")
+                                break
                         elif msg.type == aiohttp.WSMsgType.ERROR:
                             _LOGGER.error("WebSocket error: %s", msg.data)
                             break
@@ -398,6 +449,11 @@ class AtherCoordinator:
                 _LOGGER.info("WebSocket connection cancelled")
                 self._shutdown = True
                 break
+            except asyncio.TimeoutError:
+                _LOGGER.warning("WebSocket connection timed out (no data received). Resetting to default URL.")
+                self.current_ws_url = WS_URL
+                self._consecutive_failures = 0 # reset because we are manually resetting URL to fresh state
+                continue
             except RuntimeError as err:
                 if "Session is closed" in str(err):
                     _LOGGER.debug("Session closed, stopping coordinator loop")
@@ -413,9 +469,39 @@ class AtherCoordinator:
                     await asyncio.sleep(delay)
                     self._backoff_delay = min(300, self._backoff_delay * 2)
             except Exception as err:
+                # Check for "Cannot write to closing transport" - treat as transient
+                if "Cannot write to closing transport" in str(err):
+                     _LOGGER.info("Transient transport error (closing transport), reconnecting immediately: %s", err)
+                     
+                     # Increment consecutive failure counter
+                     self._consecutive_failures += 1
+                     if self._consecutive_failures >= 3:
+                         _LOGGER.warning("Too many transient errors (%d). Resetting WebSocket URL to default.", self._consecutive_failures)
+                         self.current_ws_url = WS_URL
+                         self._consecutive_failures = 0
+                         # Backoff a bit more on reset
+                         await asyncio.sleep(2)
+                     else:
+                         await asyncio.sleep(1) # Small delay to avoid tight loop
+                     
+                     continue
+
+                # If we are redirecting, some aiohttp errors are expected (race condition on close)
+                if self._reconnect_requested:
+                     _LOGGER.info("Ignored expected error during redirect: %s", err)
+                     continue
+
                 _LOGGER.error("Unexpected error in WebSocket loop: %s", err)
                 self.last_update_success = False
                 self._notify_listeners()
+                
+                # Increment failure counter for general errors too
+                self._consecutive_failures += 1
+                if self._consecutive_failures >= 3 and self.current_ws_url != WS_URL:
+                     _LOGGER.warning("Repeated failures (%d). Resetting WebSocket URL to default.", self._consecutive_failures)
+                     self.current_ws_url = WS_URL
+                     self._consecutive_failures = 0
+
                 if not self._shutdown:
                     # Exponential Backoff
                     delay = self._backoff_delay
@@ -466,10 +552,18 @@ class AtherCoordinator:
                         new_host = d_inner.get("h")
 
                         if new_host:
+                            # Extract session ID if available (critical for loop prevention)
+                            new_session = d_inner.get("s")
+
                             new_url = f"wss://{new_host}/.ws?v=5"
                             # Append namespace (ns) parameter as we are connecting to a generic shard
                             # Namespace is usually the subdomain of the original URL (ather-production-mu)
                             new_url += "&ns=ather-production-mu"
+                            
+                            if new_session:
+                                # Intentionally ignoring session ID to force fresh session on new shard
+                                # This avoids resuming potentially broken/stale sessions that cause "ghosting".
+                                _LOGGER.info("Dropping Session ID %s from redirect to force fresh session.", new_session)
 
                             if new_url != self.current_ws_url:
                                 _LOGGER.info(
@@ -478,12 +572,37 @@ class AtherCoordinator:
                                     new_url,
                                 )
                                 self.current_ws_url = new_url
-                                # Close current connection to force reconnect with new URL
-                                if self.ws and not self.ws.closed:
-                                    await self.ws.close()
-                                return
+                                # Signal reconnection needed
+                                self._reconnect_requested = True
+                                return  # Stop processing this message
                             else:
                                 _LOGGER.debug("Redirect URL is same as current.")
+                    
+                    elif d_data.get("t") == "r":  # Reset/Redirect (simple)
+                        # Payload "d" is just the host string
+                        new_host = d_data.get("d")
+                        if new_host and isinstance(new_host, str):
+                            # Check if we are already on this host (ignoring params like 's')
+                            # current_ws_url example: wss://s-usc1.firebaseio.com/.ws?v=5&s=...
+                            if new_host in self.current_ws_url:
+                                _LOGGER.info(
+                                    "Ignoring Reset (t:r) for same host: %s (Current: %s)",
+                                    new_host,
+                                    self.current_ws_url
+                                )
+                                return
+
+                            new_url = f"wss://{new_host}/.ws?v=5&ns=ather-production-mu"
+                            
+                            if new_url != self.current_ws_url:
+                                _LOGGER.info(
+                                    "Received Reset/Redirect (t:r): Switching from %s to %s",
+                                    self.current_ws_url,
+                                    new_url
+                                )
+                                self.current_ws_url = new_url
+                                self._reconnect_requested = True
+                                return
 
             if "t" in msg and msg["t"] == "d":
                 data = msg.get("d", {})
@@ -512,6 +631,8 @@ class AtherCoordinator:
                     self._process_data(data)
                     self._notify_listeners()
 
+        except ReconnectWebSocket:
+            raise
         except Exception as err:
             _LOGGER.error("Error parsing message: %s", err)
 
