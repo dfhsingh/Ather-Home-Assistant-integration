@@ -575,6 +575,9 @@ class AtherCoordinator:
 
         # Recurse into children
         for key, value in data.items():
+            # Skip firebase_cache as it contains stale data which may override fresh data
+            if key == "firebase_cache":
+                continue
             if isinstance(value, dict):
                 self._collect_data_candidates(value, candidates, current_ts)
 
@@ -622,6 +625,30 @@ class AtherCoordinator:
         import time
 
         now_ts = int(time.time() * 1000)
+
+        # Future Timestamp Guard:
+        # Ignore timestamps that are significantly in the future (> 24 hours), as they will
+        # permanently block valid subsequent updates (which will appear "stale").
+        # This protects against device clock glitches or corrupted packets.
+        FUTURE_THRESHOLD_MS = 24 * 60 * 60 * 1000  # 24 Hours
+
+        valid_candidates = []
+        for c in candidates:
+            ts = c.get("lastSyncedTime")
+            if ts:
+                try:
+                    ts_int = int(ts)
+                    if ts_int > (now_ts + FUTURE_THRESHOLD_MS):
+                        _LOGGER.warning(
+                            "Ignoring candidate with future timestamp: %s (Now: %s)",
+                            ts,
+                            now_ts,
+                        )
+                        continue
+                except (ValueError, TypeError):
+                    pass
+            valid_candidates.append(c)
+        candidates = valid_candidates
 
         candidates.sort(key=lambda x: x.get("lastSyncedTime") or now_ts)
 
@@ -678,10 +705,11 @@ class AtherCoordinator:
                 self._recursive_merge(self.data, subset)
 
         # 1. Update internal data structure recursively with the root data as well
-        # (This catches anything at the very root that might not have been captured if root wasn't a candidate,
-        # though if root has interesting keys it WAS a candidate and already merged.
-        # Repeated merge is harmless but let's keep it for safety for non-candidate keys?)
-        self._recursive_merge(self.data, data)
+        # REMOVED: Unconditional root merge can overwrite fresh data with stale data
+        # if the root packet itself is stale but wasn't caught by the specific/candidate check logic
+        # or if the timestamp guard was bypassed.
+        # We rely on the candidate logic above to extract and merge ALL relevant data safety.
+        # self._recursive_merge(self.data, data)
 
         # 2. Flatten helpful keys into self.data for easy sensor access (Backwards Compatibility)
         # Many sensors expect keys at the root level (e.g., 'batterySOC', 'speed')
@@ -695,6 +723,12 @@ class AtherCoordinator:
         # Flatten 'bike' fields
         bike = self.data.get("bike", {})
         if bike:
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug("Flattening bike keys. Bike keys: %s", list(bike.keys()))
+                _LOGGER.debug(
+                    "Bike batterySOC before flatten: %s", bike.get("batterySOC")
+                )
+
             flatten_keys(
                 bike,
                 [
@@ -717,6 +751,14 @@ class AtherCoordinator:
             )
             if "GPSLocation" in bike:
                 self._update_gps(bike["GPSLocation"])
+        else:
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug("No 'bike' dict in self.data to flatten.")
+
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "Final batterySOC in self.data: %s", self.data.get("batterySOC")
+            )
 
         # Flatten 'charging' to root if present (sometimes comes as separate object)
         if "charging" in data:
