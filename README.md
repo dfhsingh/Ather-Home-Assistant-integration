@@ -53,7 +53,8 @@ The integration creates several entities including:
 
 ## WiKi
 
-For tips and tricks [Go to Wiki pages]([URL](https://github.com/dfhsingh/Ather-Home-Assistant-integration/wiki))
+For tips and tricks [Go to Wiki pages](https://github.com/dfhsingh/Ather-Home-Assistant-integration/wiki)
+
 
 ## Disclaimer
 
