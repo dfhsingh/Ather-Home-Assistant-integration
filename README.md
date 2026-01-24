@@ -40,7 +40,7 @@ Unofficial Home Assistant integration for Ather Energy electric scooters (450X, 
 4. Enter your Ather registered Phone Number, key* and OTP 
 
 > [!NOTE]
-> Required key is to identify Ather server, its available in mobile app
+> Required key is to identify Ather server, its available in mobile app source, you need to decompile app to get the key.
 5. Follow the prompts to complete proper setup.
 
 ## Entities
