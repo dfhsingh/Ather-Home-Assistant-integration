@@ -376,11 +376,13 @@ class AtherCoordinator:
                 ) as ws:
                     self.ws = ws
                     _LOGGER.info("Connected to Ather WebSocket")
-                    # Successful connection, reset backoff
-                    self._backoff_delay = 10
                     self.last_update_success = True
                     self._reconnect_requested = False  # Reset flag on new connection
-                    self._consecutive_failures = 0 # connection successful
+                    
+                    # NOTE: We do NOT reset _consecutive_failures or _backoff_delay here.
+                    # We wait until we successfully receive a message to call it a "stable" connection.
+                    # This prevents infinite loops if we connect but crash immediately.
+
                     self._notify_listeners()
 
                     # Stabilization delay to avoid immediate closure race conditions
@@ -520,6 +522,14 @@ class AtherCoordinator:
                     self._log_raw_message, log_path, message
                 )
 
+            # If we received a message, the connection is at least somewhat functional.
+            # Reset counters here to indicate stability.
+            if self._consecutive_failures > 0:
+                 if _LOGGER.isEnabledFor(logging.DEBUG):
+                     _LOGGER.debug("Connection stabilized (msg received). Resetting failure counters.")
+                 self._consecutive_failures = 0
+                 self._backoff_delay = 10
+
             msg = json.loads(message)
 
             # Debug logging for message structure
@@ -552,7 +562,7 @@ class AtherCoordinator:
                         new_host = d_inner.get("h")
 
                         if new_host:
-                            # Extract session ID if available (critical for loop prevention)
+                            # Extract session ID if available
                             new_session = d_inner.get("s")
 
                             new_url = f"wss://{new_host}/.ws?v=5"
