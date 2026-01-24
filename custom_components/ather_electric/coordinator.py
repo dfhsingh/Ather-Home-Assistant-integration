@@ -62,6 +62,12 @@ class AtherCoordinator:
         self._runner_task: Optional[asyncio.Task] = None
         self._remove_stop_listener = None
 
+        # Rate Limiting & Backoff
+        self._last_remote_command_time = 0
+        self._last_scooter_details_fetch = 0
+        self._details_cache = None
+        self._backoff_delay = 10  # Initial delay
+
         # State tracking
         self._previous_state = None
 
@@ -111,6 +117,12 @@ class AtherCoordinator:
             _LOGGER.warning("Ping blocked: Scooter key is ON")
             return
 
+        now = time.time()
+        if now - self._last_remote_command_time < 30:
+            _LOGGER.warning("Ping blocked: Rate limit (30s cooldown)")
+            return
+        self._last_remote_command_time = now
+
         path = f"scooters/{self.scooter_id}/ping_my_scooter"
         ts = int(time.time() * 1000)
         data = {
@@ -139,6 +151,12 @@ class AtherCoordinator:
                 _LOGGER.warning("Remote Stop blocked: Not currently charging")
                 return
 
+        now = time.time()
+        if now - self._last_remote_command_time < 30:
+            _LOGGER.warning("Remote Start/Stop blocked: Rate limit (30s cooldown)")
+            return
+        self._last_remote_command_time = now
+
         path = f"scooters/{self.scooter_id}/remote_charging"
         ts = int(time.time() * 1000)
 
@@ -163,6 +181,12 @@ class AtherCoordinator:
         if heartbeat == "On":
             _LOGGER.warning("Remote Shutdown blocked: Charger is connected")
             return
+
+        now = time.time()
+        if now - self._last_remote_command_time < 30:
+            _LOGGER.warning("Remote Shutdown blocked: Rate limit (30s cooldown)")
+            return
+        self._last_remote_command_time = now
 
         path = f"scooters/{self.scooter_id}/remote_shutdown"
         ts = int(time.time() * 1000)
@@ -295,10 +319,22 @@ class AtherCoordinator:
                 # Fetch full state via HTTP to ensure initial freshness
                 # This helps if WebSocket sends stale cached data initially.
                 try:
-                    _LOGGER.info("Fetching full scooter state via HTTP...")
-                    full_data = await self.api.get_scooter_details(
-                        self.scooter_id, id_token
-                    )
+                    current_time = time.time()
+                    if (
+                        self._details_cache
+                        and (current_time - self._last_scooter_details_fetch) < 300
+                    ):
+                        _LOGGER.info("Using cached scooter details (TTL 5m)")
+                        full_data = self._details_cache
+                    else:
+                        _LOGGER.info("Fetching full scooter state via HTTP...")
+                        full_data = await self.api.get_scooter_details(
+                            self.scooter_id, id_token
+                        )
+                        if full_data:
+                            self._details_cache = full_data
+                            self._last_scooter_details_fetch = current_time
+
                     if full_data:
                         _LOGGER.debug(
                             "HTTP Fetch successful. Keys: %s", list(full_data.keys())
@@ -318,6 +354,8 @@ class AtherCoordinator:
                 async with self.session.ws_connect(self.current_ws_url) as ws:
                     self.ws = ws
                     _LOGGER.info("Connected to Ather WebSocket")
+                    # Successful connection, reset backoff
+                    self._backoff_delay = 10
                     self.last_update_success = True
                     self._notify_listeners()
 
@@ -367,19 +405,25 @@ class AtherCoordinator:
                     break
                 _LOGGER.error("Runtime error in coordinator: %s", err)
                 if not self._shutdown:
-                    await asyncio.sleep(10)
-            except aiohttp.ClientError as err:
-                _LOGGER.error("WebSocket connection error: %s", err)
-                self.last_update_success = False
-                self._notify_listeners()
-                if not self._shutdown:
-                    await asyncio.sleep(10)
+                    # Exponential Backoff with Jitter
+                    delay = self._backoff_delay
+                    _LOGGER.info(
+                        "Waiting %s seconds before reconnecting (Backoff)", delay
+                    )
+                    await asyncio.sleep(delay)
+                    self._backoff_delay = min(300, self._backoff_delay * 2)
             except Exception as err:
                 _LOGGER.error("Unexpected error in WebSocket loop: %s", err)
                 self.last_update_success = False
                 self._notify_listeners()
                 if not self._shutdown:
-                    await asyncio.sleep(10)
+                    # Exponential Backoff
+                    delay = self._backoff_delay
+                    _LOGGER.info(
+                        "Waiting %s seconds before reconnecting (Backoff)", delay
+                    )
+                    await asyncio.sleep(delay)
+                    self._backoff_delay = min(300, self._backoff_delay * 2)
 
     async def _handle_message(self, message: str):
         """Parse incoming WebSocket message."""
@@ -850,9 +894,43 @@ class AtherCoordinator:
         )
 
     def _log_raw_message(self, path: str, message: str):
-        """Log raw message to file (runs in executor)."""
+        """Log raw message to file (runs in executor) with redaction."""
         try:
+            # Redact sensitive info
+            redacted_msg = message
+            try:
+                # Basic string replacement for common patterns to avoid full JSON parse if possible/fast
+                # But JSON parse is safer for key targeting.
+                msg_json = json.loads(message)
+
+                def redact(obj):
+                    if isinstance(obj, dict):
+                        for k, v in obj.items():
+                            if k in [
+                                "token",
+                                "idToken",
+                                "refreshToken",
+                                "cred",
+                                "lat",
+                                "lng",
+                                "mobile_no",
+                                "email",
+                            ]:
+                                obj[k] = "***REDACTED***"
+                            elif isinstance(v, (dict, list)):
+                                redact(v)
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            redact(item)
+
+                redact(msg_json)
+                redacted_msg = json.dumps(msg_json)
+            except Exception:
+                # If parsing fails, just log it (or maybe don't log if too risky?)
+                # We'll assume if it's not JSON, it might not contain structured secrets.
+                pass
+
             with open(path, "a") as f:
-                f.write(f"{int(time.time() * 1000)}: {message}\n")
+                f.write(f"{int(time.time() * 1000)}: {redacted_msg}\n")
         except Exception as err:
             _LOGGER.error("Error writing to raw log: %s", err)
