@@ -51,6 +51,10 @@ The integration creates several entities including:
 - `binary_sensor.ather_charging`: Charging status.
 - `device_tracker.ather_scooter`: Location of the scooter.
 
+## WiKi
+
+For tips and tricks [Go to Wiki pages]([URL](https://github.com/dfhsingh/Ather-Home-Assistant-integration/wiki))
+
 ## Disclaimer
 
 This is an unofficial integration and is not affiliated with Ather Energy. Use it at your own risk.
