@@ -142,9 +142,17 @@ class AtherBinarySensor(BinarySensorEntity):
     def extra_state_attributes(self) -> dict[str, any]:
         """Return attributes."""
         attrs = {}
-        updated_at = self.coordinator.get_data("updatedAt")
-        if updated_at:
-            attrs["updated_at"] = updated_at
+        last_synced = self.coordinator.get_data("lastSyncedTime")
+        if last_synced:
+            try:
+                # Convert ms to ISO string or datetime for HA
+                from datetime import datetime, timezone
+
+                if isinstance(last_synced, (int, float)):
+                    val = datetime.fromtimestamp(last_synced / 1000, tz=timezone.utc)
+                    attrs["last_synced_time"] = val
+            except Exception:
+                pass
         return attrs
 
 

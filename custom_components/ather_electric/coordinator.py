@@ -454,14 +454,17 @@ class AtherCoordinator:
                             _LOGGER.debug(
                                 "Subscription Response: r=%s, status=%s", req_id, status
                             )
+                        # Mark ready if initial subscriptions succeed? (Optional, kept existing logic flow)
 
                 if b_body and "d" in b_body:
                     real_data = b_body["d"]
-                    self._process_data(real_data)
+                    path = b_body.get("p")
+                    self._process_data(real_data, path)
                     self._notify_listeners()
 
-                # Also try processing the whole data object, in case 'b' is missing or structure is different
+                # Also try processing the whole data object, in case 'b' is missing (unlikely for Ather WS)
                 elif isinstance(data, dict):
+                    # Fallback without path
                     self._process_data(data)
                     self._notify_listeners()
 
@@ -534,54 +537,7 @@ class AtherCoordinator:
 
         return expanded
 
-    def _collect_data_candidates(
-        self, data: Any, candidates: list, parent_ts: Any = None
-    ) -> None:
-        """Recursively collect dictionaries that contain interesting data."""
-        if not isinstance(data, dict):
-            return
-
-        # If data doesn't have a timestamp but we have a parent timestamp, inject it for sorting
-        if "lastSyncedTime" not in data and parent_ts:
-            data["lastSyncedTime"] = parent_ts
-
-        INTERESTING_KEYS = [
-            "bike",
-            "trip",
-            "charging",
-            "app",
-            "navigation",
-            "subscription",
-            "stats",
-            "features",
-            "modeRange",
-        ]
-
-        # Check if this node is a candidate (contains any interesting key)
-        # We look for dicts that *contain* the keys, not the keys themselves as isolated values.
-        # But wait, if 'bike' is in data, then 'data' is the container/candidate.
-        # Yes.
-        is_candidate = False
-        for key in INTERESTING_KEYS:
-            if key in data:
-                is_candidate = True
-                break
-
-        if is_candidate:
-            candidates.append(data)
-
-        # Capture local timestamp if present to pass down
-        current_ts = data.get("lastSyncedTime") or parent_ts
-
-        # Recurse into children
-        for key, value in data.items():
-            # Skip firebase_cache as it contains stale data which may override fresh data
-            if key == "firebase_cache":
-                continue
-            if isinstance(value, dict):
-                self._collect_data_candidates(value, candidates, current_ts)
-
-    def _process_data(self, data: Any):
+    def _process_data(self, data: Any, path: str = None):
         """Process and flatten data updates."""
         if not isinstance(data, dict):
             return
@@ -590,127 +546,49 @@ class AtherCoordinator:
         # This ensures that patches are converted to nested dicts that our candidates search can find.
         data = self._expand_collapsed_json(data)
 
-        candidates = []
-
         # Sanity Check: If entire packet is too old, drop it.
-        # Check 'updatedAt' field (ISO 8601 string)
-        updated_at_str = data.get("updatedAt")
-        if updated_at_str:
+        # Check 'lastSyncedTime' field (Timestamp in milliseconds)
+        last_synced_ms = data.get("lastSyncedTime")
+        if last_synced_ms:
             try:
-                # "2026-01-20T01:17:23.504Z"
-                updated_at = dt_util.parse_datetime(updated_at_str)
-                if updated_at:
+                # 1769217813472 -> Milliseconds
+                last_synced_dt = datetime.datetime.fromtimestamp(
+                    int(last_synced_ms) / 1000, tz=datetime.timezone.utc
+                )
+                if last_synced_dt:
                     now = dt_util.now()
-                    diff = now - updated_at
-                    if diff > datetime.timedelta(hours=5):
+                    diff = now - last_synced_dt
+                    if diff > datetime.timedelta(hours=24):
                         _LOGGER.warning(
-                            "Ignoring stale data (updatedAt: %s, age: %s)",
-                            updated_at_str,
+                            "Ignoring stale data (lastSyncedTime: %s, age: %s)",
+                            last_synced_ms,
                             diff,
                         )
                         return
             except Exception as e:
-                _LOGGER.warning("Failed to parse updatedAt: %s", e)
+                _LOGGER.warning("Failed to parse lastSyncedTime: %s", e)
 
-        # 0. Robust Data Extraction: Collect all potential data blocks and sort by timestamp
+        # --- Simplifed Path-Based Merging ---
 
-        # Try to find a root-level timestamp to seed properly
-        root_ts = data.get("lastSyncedTime")
-        self._collect_data_candidates(data, candidates, root_ts)
+        # Determine target dictionary based on path
+        # If path ends in '/app', we merge into self.data['app']
+        # Otherwise (root or generic), we merge into self.data
 
-        # Sort candidates by lastSyncedTime (ascending).
-        # missing timestamp -> Current Time (assume it's a real-time live update).
-        # This ensures that live updates (which might lack a timestamp) are treated as NEWER
-        # than the stale cache (which has an old timestamp).
-        import time
+        target_dict = self.data
+        if path and path.endswith("/app"):
+            if "app" not in self.data:
+                self.data["app"] = {}
+            target_dict = self.data["app"]
 
-        now_ts = int(time.time() * 1000)
+        # Merge the incoming data
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "Processing data for path: %s. Keys: %s", path, list(data.keys())
+            )
 
-        # Future Timestamp Guard:
-        # Ignore timestamps that are significantly in the future (> 24 hours), as they will
-        # permanently block valid subsequent updates (which will appear "stale").
-        # This protects against device clock glitches or corrupted packets.
-        FUTURE_THRESHOLD_MS = 24 * 60 * 60 * 1000  # 24 Hours
+        self._recursive_merge(target_dict, data)
 
-        valid_candidates = []
-        for c in candidates:
-            ts = c.get("lastSyncedTime")
-            if ts:
-                try:
-                    ts_int = int(ts)
-                    if ts_int > (now_ts + FUTURE_THRESHOLD_MS):
-                        _LOGGER.warning(
-                            "Ignoring candidate with future timestamp: %s (Now: %s)",
-                            ts,
-                            now_ts,
-                        )
-                        continue
-                except (ValueError, TypeError):
-                    pass
-            valid_candidates.append(c)
-        candidates = valid_candidates
-
-        candidates.sort(key=lambda x: x.get("lastSyncedTime") or now_ts)
-
-        # Merge candidates in order
-        for c in candidates:
-            # Global Timestamp Guard
-            # If candidate has a timestamp, compare with stored timestamp.
-            c_ts = c.get("lastSyncedTime")
-            current_ts = self.data.get("lastSyncedTime")
-
-            # Only apply guard if BOTH have valid timestamps from the source.
-            # If c_ts is None (implied NOW), we skip the check and allow it to merge.
-            if c_ts and current_ts:
-                try:
-                    if int(c_ts) < int(current_ts):
-                        if _LOGGER.isEnabledFor(logging.DEBUG):
-                            _LOGGER.debug(
-                                "Ignoring stale candidate (ts=%s < current=%s)",
-                                c_ts,
-                                current_ts,
-                            )
-                        continue
-                except (ValueError, TypeError):
-                    pass
-
-            # We only merge the INTERESTING keys from the candidate, plus lastSyncedTime
-            # to avoid merging irrelevant structural keys.
-
-            INTERESTING_KEYS = [
-                "bike",
-                "trip",
-                "charging",
-                "app",
-                "navigation",
-                "subscription",
-                "stats",
-                "features",
-                "modeRange",
-                "lastSyncedTime",
-            ]
-
-            subset = {}
-            for k in INTERESTING_KEYS:
-                if k in c:
-                    subset[k] = c[k]
-
-            if subset:
-                if _LOGGER.isEnabledFor(logging.DEBUG):
-                    _LOGGER.debug(
-                        "Merging Candidate (ts=%s): keys=%s",
-                        c.get("lastSyncedTime"),
-                        list(subset.keys()),
-                    )
-                self._recursive_merge(self.data, subset)
-
-        # 1. Update internal data structure recursively with the root data as well
-        # REMOVED: Unconditional root merge can overwrite fresh data with stale data
-        # if the root packet itself is stale but wasn't caught by the specific/candidate check logic
-        # or if the timestamp guard was bypassed.
-        # We rely on the candidate logic above to extract and merge ALL relevant data safety.
-        # self._recursive_merge(self.data, data)
-
+        # --- Flattening Logic (Backward Compatibility) ---
         # 2. Flatten helpful keys into self.data for easy sensor access (Backwards Compatibility)
         # Many sensors expect keys at the root level (e.g., 'batterySOC', 'speed')
 
@@ -723,12 +601,6 @@ class AtherCoordinator:
         # Flatten 'bike' fields
         bike = self.data.get("bike", {})
         if bike:
-            if _LOGGER.isEnabledFor(logging.DEBUG):
-                _LOGGER.debug("Flattening bike keys. Bike keys: %s", list(bike.keys()))
-                _LOGGER.debug(
-                    "Bike batterySOC before flatten: %s", bike.get("batterySOC")
-                )
-
             flatten_keys(
                 bike,
                 [
@@ -751,22 +623,9 @@ class AtherCoordinator:
             )
             if "GPSLocation" in bike:
                 self._update_gps(bike["GPSLocation"])
-        else:
-            if _LOGGER.isEnabledFor(logging.DEBUG):
-                _LOGGER.debug("No 'bike' dict in self.data to flatten.")
-
-        if _LOGGER.isEnabledFor(logging.DEBUG):
-            _LOGGER.debug(
-                "Final batterySOC in self.data: %s", self.data.get("batterySOC")
-            )
-
-        # Flatten 'charging' to root if present (sometimes comes as separate object)
-        if "charging" in data:
-            # We already merged it into self.data['charging'] via recursive merge
-            # Check if any sensors need something specific? No, they use get_data('charging')
-            pass
 
         # Flatten 'app' fields
+        # Note: If path was /app, the data is now in self.data['app']
         app = self.data.get("app", {})
         if app:
             flatten_keys(app, ["modeRange", "features", "savings"])
@@ -786,23 +645,14 @@ class AtherCoordinator:
                 self._ready_event.set()
 
         # Flatten 'trip' fields
-        if "trip" in data:
-            trip = data["trip"]
+        if "trip" in self.data:
+            trip = self.data["trip"]
             current_trip = trip.copy()
             # Try to attach timestamp
             if "lastSyncedTime" in self.data:
                 current_trip["timestamp"] = self.data["lastSyncedTime"]
             self.data["current_trip"] = current_trip
 
-            flatten_keys(trip, ["tripA", "tripB"])
-
-        # Also check self.data['trip'] because deep_extract might have put it there
-        elif "trip" in self.data:
-            trip = self.data["trip"]
-            current_trip = trip.copy()
-            if "lastSyncedTime" in self.data:
-                current_trip["timestamp"] = self.data["lastSyncedTime"]
-            self.data["current_trip"] = current_trip
             flatten_keys(trip, ["tripA", "tripB"])
 
         # Flatten 'navigation'
