@@ -371,8 +371,8 @@ class AtherCoordinator:
                 async with self.session.ws_connect(
                     self.current_ws_url, 
                     headers=ws_headers, 
-
-                    receive_timeout=60
+                    
+                    receive_timeout=600,
                 ) as ws:
                     self.ws = ws
                     _LOGGER.info("Connected to Ather WebSocket")
@@ -587,7 +587,7 @@ class AtherCoordinator:
                                 return  # Stop processing this message
                             else:
                                 _LOGGER.debug("Redirect URL is same as current.")
-                    
+
                     elif d_data.get("t") == "r":  # Reset/Redirect (simple)
                         # Payload "d" is just the host string
                         new_host = d_data.get("d")
@@ -744,6 +744,15 @@ class AtherCoordinator:
                 _LOGGER.warning("Failed to parse lastSyncedTime: %s", e)
 
         # --- Simplifed Path-Based Merging ---
+
+        # Auto-Reenable Shutdown Protection if we receive fresh data
+        # This implies the scooter is awake/communicating, so we re-arm the safety lock.
+        if not self.shutdown_safe_mode:
+            _LOGGER.info("Fresh data received. Re-enabling Shutdown Protection (Safety Lock).")
+            self.shutdown_safe_mode = True
+            # We don't need to write state here explicitly; the switch entity checks this flag
+            # on update. However, we might want to trigger an update for the switch entity 
+            # if we could, but notifying listeners at the end of this method handles it.
 
         # Determine target dictionary based on path
         # If path ends in '/app', we merge into self.data['app']
@@ -1062,6 +1071,7 @@ class AtherCoordinator:
                 pass
 
             with open(path, "a") as f:
-                f.write(f"{int(time.time() * 1000)}: {redacted_msg}\n")
+                # f.write(f"{int(time.time() * 1000)}: {redacted_msg}\n")
+                f.write(f"{datetime.now().isoformat()}: {redacted_msg}\n")
         except Exception as err:
             _LOGGER.error("Error writing to raw log: %s", err)
