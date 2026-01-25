@@ -415,9 +415,13 @@ class AtherCoordinator:
                     _LOGGER.debug("Auth Payload Sent. Entering message loop.")
 
                     # Subscriptions
+                    # Subscriptions
                     paths = [
-                        f"/scooters/{self.scooter_id}",
+                        f"/scooters/{self.scooter_id}/bike",
+                        f"/scooters/{self.scooter_id}/charging",
                         f"/scooters/{self.scooter_id}/app",
+                        f"/scooters/{self.scooter_id}/tpms",
+                        f"/scooters/{self.scooter_id}/lastSyncedTime",
                     ]
 
                     for idx, path in enumerate(paths, start=2):
@@ -714,6 +718,16 @@ class AtherCoordinator:
 
     def _process_data(self, data: Any, path: str = None):
         """Process and flatten data updates."""
+
+        # Handle primitive data for specific paths (e.g., lastSyncedTime)
+        if path and path.endswith("/lastSyncedTime"):
+            current_val = self.data.get("lastSyncedTime")
+            if current_val != data:
+                 self.data["lastSyncedTime"] = data
+                 if _LOGGER.isEnabledFor(logging.DEBUG):
+                     _LOGGER.debug("Updated lastSyncedTime: %s", data)
+            return
+
         if not isinstance(data, dict):
             return
 
@@ -734,11 +748,13 @@ class AtherCoordinator:
                     now = dt_util.now()
                     diff = now - last_synced_dt
                     if diff > datetime.timedelta(hours=24):
-                        _LOGGER.warning(
-                            "Ignoring stale data (lastSyncedTime: %s, age: %s)",
-                            last_synced_ms,
-                            diff,
-                        )
+                        # Log as debug to reduce noise if frequent
+                        if _LOGGER.isEnabledFor(logging.DEBUG):
+                            _LOGGER.debug(
+                                "Ignoring stale data (lastSyncedTime: %s, age: %s)",
+                                last_synced_ms,
+                                diff,
+                            )
                         return
             except Exception as e:
                 _LOGGER.warning("Failed to parse lastSyncedTime: %s", e)
@@ -750,19 +766,27 @@ class AtherCoordinator:
         if not self.shutdown_safe_mode:
             _LOGGER.info("Fresh data received. Re-enabling Shutdown Protection (Safety Lock).")
             self.shutdown_safe_mode = True
-            # We don't need to write state here explicitly; the switch entity checks this flag
-            # on update. However, we might want to trigger an update for the switch entity 
-            # if we could, but notifying listeners at the end of this method handles it.
 
         # Determine target dictionary based on path
-        # If path ends in '/app', we merge into self.data['app']
-        # Otherwise (root or generic), we merge into self.data
-
         target_dict = self.data
-        if path and path.endswith("/app"):
-            if "app" not in self.data:
-                self.data["app"] = {}
-            target_dict = self.data["app"]
+        
+        if path:
+            if path.endswith("/bike"):
+                if "bike" not in self.data:
+                    self.data["bike"] = {}
+                target_dict = self.data["bike"]
+            elif path.endswith("/charging"):
+                if "charging" not in self.data:
+                    self.data["charging"] = {}
+                target_dict = self.data["charging"]
+            elif path.endswith("/tpms"):
+                 if "tpms" not in self.data:
+                     self.data["tpms"] = {}
+                 target_dict = self.data["tpms"]
+            elif path.endswith("/app"):
+                if "app" not in self.data:
+                    self.data["app"] = {}
+                target_dict = self.data["app"]
 
         # Merge the incoming data
         if _LOGGER.isEnabledFor(logging.DEBUG):
@@ -1072,6 +1096,6 @@ class AtherCoordinator:
 
             with open(path, "a") as f:
                 # f.write(f"{int(time.time() * 1000)}: {redacted_msg}\n")
-                f.write(f"{datetime.datetime.now().isoformat()}: {redacted_msg}\n")
+                f.write(f"{dt_util.now().isoformat()}: {redacted_msg}\n")
         except Exception as err:
             _LOGGER.error("Error writing to raw log: %s", err)
