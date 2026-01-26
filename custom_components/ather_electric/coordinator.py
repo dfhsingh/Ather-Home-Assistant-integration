@@ -1096,6 +1096,6 @@ class AtherCoordinator:
 
             with open(path, "a") as f:
                 # f.write(f"{int(time.time() * 1000)}: {redacted_msg}\n")
-                f.write(f"{dt_util.now().isoformat()}: {redacted_msg}\n")
+                f.write(f"{datetime.datetime.now().isoformat()}: {redacted_msg}\n")
         except Exception as err:
             _LOGGER.error("Error writing to raw log: %s", err)
