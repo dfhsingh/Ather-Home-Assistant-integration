@@ -15,6 +15,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 import logging
 
 from .const import DOMAIN
+from .binary_sensor import is_binary_value
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,7 +73,6 @@ async def async_setup_entry(
         AtherTripEfficiencySensor(coordinator, "B"),
         AtherTripAvgSpeedSensor(coordinator, "A"),
         AtherTripAvgSpeedSensor(coordinator, "B"),
-        AtherNavigationStateSensor(coordinator),
         AtherSubscriptionStatusSensor(coordinator),
         AtherTimeRemainingSensor(coordinator, "full", "Time to Full Charge"),
         AtherTimeRemainingSensor(coordinator, "80", "Time to 80% Charge"),
@@ -98,14 +98,10 @@ async def async_setup_entry(
             SensorDeviceClass.TIMESTAMP,
         ),
         # Current Trip Sensors
-        AtherCurrentTripStateSensor(coordinator),
         AtherCurrentTripDistanceSensor(coordinator),
         AtherCurrentTripDurationSensor(coordinator),
         AtherCurrentTripSpeedSensor(coordinator),
-        AtherCurrentTripEfficiencySensor(coordinator),
-        AtherAltitudeChangeSensor(coordinator),  # Added this line
         # Navigation & Subscription
-        AtherNavigationTimeSensor(coordinator),
         AtherSubscriptionExpirySensor(coordinator),
         AtherChargingCreditsSensor(coordinator),
         # Hardware Diagnostics
@@ -119,6 +115,27 @@ async def async_setup_entry(
         AtherDiagnosticSensor(coordinator, "City", "city", "mdi:city"),
         AtherRemoteShutdownSensor(coordinator),
     ]
+
+    # Dynamic Non-Binary Feature Flags Discovery
+    features = coordinator.get_data("features", {})
+    if features:
+        for feature_key, value in features.items():
+            # Check if it looks like a NON-binary flag (values like 79, 110, etc.)
+            if not is_binary_value(value):
+                # Generate a readable name
+                readable_name = (
+                    feature_key.replace("_", " ")
+                    .replace("app", "App")
+                    .replace("vehicle", "Vehicle")
+                    .replace("atherStack", "Ather Stack")
+                )
+                readable_name = " ".join(
+                    word.capitalize() for word in readable_name.split()
+                )
+                
+                entities.append(
+                    AtherFeatureSensor(coordinator, feature_key, readable_name)
+                )
 
     async_add_entities(entities)
 
@@ -290,6 +307,8 @@ class AtherBikeTypeSensor(AtherSensor):
 
     _attr_name = "Bike Type"
     _attr_icon = "mdi:moped-electric"
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     _attr_entity_registry_enabled_default = False
 
@@ -495,33 +514,7 @@ class AtherTripAvgSpeedSensor(AtherSensor):
         return data.get("avgSpeed")
 
 
-class AtherNavigationStateSensor(AtherSensor):
-    """Representation of Navigation State."""
 
-    _attr_name = "Navigation Status"
-    _attr_icon = "mdi:map-marker-path"
-
-    _attr_entity_registry_enabled_default = False
-
-    @property
-    def unique_id(self) -> str:
-        return f"ather_{self.coordinator.scooter_id}_nav_status"
-
-    @property
-    def native_value(self) -> str | None:
-        return self.coordinator.get_data("navigation_status")
-
-    @property
-    def extra_state_attributes(self) -> dict[str, any]:
-        """Return attributes."""
-        attrs = super().extra_state_attributes
-        attrs.update(
-            {
-                "destination": self.coordinator.get_data("navigation_title"),
-                "trip_plan": self.coordinator.get_data("navigation_trip_plan"),
-            }
-        )
-        return attrs
 
 
 class AtherSubscriptionStatusSensor(AtherSensor):
@@ -626,6 +619,8 @@ class AtherSoftwareVersionSensor(AtherSensor):
 
     _attr_name = "Software Version"
     _attr_icon = "mdi:cellphone-arrow-down"
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     _attr_entity_registry_enabled_default = False
 
@@ -791,6 +786,8 @@ class AtherServiceSensor(AtherSensor):
 class AtherWarrantySensor(AtherSensor):
     """Representation of Warranty Information."""
 
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
     _attr_entity_registry_enabled_default = False
 
     def __init__(
@@ -921,117 +918,7 @@ class AtherCurrentTripSpeedSensor(AtherCurrentTripSensor):
         return self.current_trip_data.get("averageSpeed")
 
 
-class AtherCurrentTripStateSensor(AtherCurrentTripSensor):
-    """Representation of Current Trip State."""
 
-    _attr_name = "Current Trip State"
-    _attr_icon = "mdi:map-marker-path"
-    _attr_icon = "mdi:map-marker-path"
-
-    _attr_entity_registry_enabled_default = False
-
-    @property
-    def unique_id(self) -> str:
-        return f"ather_{self.coordinator.scooter_id}_current_trip_state"
-
-    @property
-    def native_value(self):
-        return self.current_trip_data.get("activeTrip")
-
-
-class AtherCurrentTripEfficiencySensor(AtherCurrentTripSensor):
-    """Representation of Current Trip Efficiency (Calculated)."""
-
-    _attr_name = "Current Trip Efficiency"
-    _attr_native_unit_of_measurement = "km/kWh"
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:lightning-bolt"
-
-    @property
-    def unique_id(self) -> str:
-        return f"ather_{self.coordinator.scooter_id}_current_trip_efficiency"
-
-    @property
-    def native_value(self):
-        """Return the calculated efficiency."""
-        trip_start_soc = self.coordinator.get_data("trip_start_soc")
-        current_soc = self.coordinator.get_data("batterySOC")
-
-        # Distance might be at root or in current_trip
-        distance = self.coordinator.get_data("distance")
-        if distance is None:
-            distance = self.current_trip_data.get("distance")
-
-        if trip_start_soc is None or current_soc is None or distance is None:
-            return None
-
-        try:
-            dist_val = float(distance)
-            # Logic matching user's formula: Distance / ((StartSOC - CurrentSOC) * 3.7 / 100)
-            soc_diff = float(trip_start_soc) - float(current_soc)
-            # 1. Handle the "scooter hasn't moved" case explicitly
-            if dist_val == 0:
-                return 0
-
-            # 2. Handle cases where SOC hasn't dropped yet (avoid division by zero)
-            # This happens at the very start of a trip
-            if soc_diff <= 0:
-                return 0  # Avoid division by zero or negative efficiency if SOC rose (regen?)
-
-            energy_consumed = soc_diff * 3.7 / 100.0
-            if energy_consumed == 0:
-                return 0
-
-            return round(dist_val / energy_consumed, 2)
-        except (ValueError, TypeError):
-            _LOGGER.error("AtherCurrentTripEfficiencySensor: %s", ValueError, TypeError)
-            return None
-
-
-class AtherAltitudeChangeSensor(AtherSensor):
-    """Sensor to calculate altitude change during the current trip."""
-
-    _attr_name = "Current Trip Altitude Change"
-    _attr_device_class = SensorDeviceClass.DISTANCE
-    _attr_native_unit_of_measurement = UnitOfLength.METERS
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:elevation-rise"
-
-    @property
-    def unique_id(self) -> str:
-        return f"ather_{self.coordinator.scooter_id}_trip_altitude_change"
-
-    @property
-    def native_value(self):
-        """Return the altitude change."""
-        start_alt = self.coordinator.get_data("trip_start_altitude")
-        current_alt = self.coordinator.get_data("altitude")
-
-        if start_alt is None or current_alt is None:
-            return None
-
-        try:
-            return float(current_alt) - float(start_alt)
-        except (ValueError, TypeError):
-            return None
-
-
-class AtherNavigationTimeSensor(AtherSensor):
-    """Estimated time of arrival for navigation."""
-
-    _attr_name = "Estimated Arrival"
-    _attr_icon = "mdi:clock-end"
-
-    _attr_entity_registry_enabled_default = False
-
-    @property
-    def unique_id(self) -> str:
-        return f"ather_{self.coordinator.scooter_id}_nav_arrival"
-
-    @property
-    def native_value(self) -> str | None:
-        """Return time to destination."""
-        return self.coordinator.get_data("navigation_arrival_time")
 
 
 class AtherSubscriptionExpirySensor(AtherSensor):
@@ -1076,6 +963,8 @@ class AtherChargingCreditsSensor(AtherSensor):
 class AtherDiagnosticSensor(AtherSensor):
     """General diagnostic sensor for scooter properties."""
 
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
     _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator, name: str, property_key: str, icon: str) -> None:
@@ -1098,3 +987,31 @@ class AtherDiagnosticSensor(AtherSensor):
             # Fallback to root (some like generation are root)
             val = self.coordinator.get_data(self._property_key)
         return val
+
+
+class AtherFeatureSensor(AtherSensor):
+    """Representation of a generic feature sensor (Diagnostic, Non-Binary)."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(
+        self, coordinator, feature_key: str, name: str, icon: str = None
+    ) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self.feature_key = feature_key
+        self._attr_name = name
+        if icon:
+            self._attr_icon = icon
+        self._id_suffix = feature_key.lower().replace("_", "_")
+
+    @property
+    def unique_id(self) -> str:
+        return f"ather_{self.coordinator.scooter_id}_feature_{self._id_suffix}"
+
+    @property
+    def native_value(self) -> any:
+        """Return the state of the sensor."""
+        features = self.coordinator.get_data("features", {})
+        return features.get(self.feature_key)

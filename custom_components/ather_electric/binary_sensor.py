@@ -33,82 +33,38 @@ async def async_setup_entry(
         # Active Status Sensors
         AtherParkingAssistStatusSensor(coordinator),
         AtherCruiseControlStatusSensor(coordinator),
-        # Diagnostic Feature Flags
-        AtherFeatureBinarySensor(
-            coordinator, "vehicle_parkAssist", "Parking Assist Feature", "mdi:parking"
-        ),
-        AtherFeatureBinarySensor(
-            coordinator,
-            "vehicle_cruiseControl",
-            "Cruise Control Feature",
-            "mdi:speedometer-auto",
-        ),
-        AtherFeatureBinarySensor(
-            coordinator, "vehicle_fallDetection", "Fall Detection", "mdi:alert-box"
-        ),
-        AtherFeatureBinarySensor(coordinator, "vehicle_hillAssist", "Hill Assist"),
-        AtherFeatureBinarySensor(coordinator, "vehicle_theftTow", "Theft & Tow"),
-        AtherFeatureBinarySensor(coordinator, "vehicle_smartEco", "Smart Eco"),
-        AtherFeatureBinarySensor(coordinator, "warp_mode", "Warp Mode"),
         AtherIncognitoSensor(coordinator),
-        # New Feature Flags & Diagnostics
-        AtherFeatureBinarySensor(
-            coordinator, "atherStackCrashAlert", "Crash Alert", "mdi:car-crash"
-        ),
-        AtherFeatureBinarySensor(
-            coordinator, "atherStackUnsafeParking", "Unsafe Parking", "mdi:parking"
-        ),
-        AtherFeatureBinarySensor(
-            coordinator, "vehicle_autoIndicator", "Auto Indicator", "mdi:indicator"
-        ),
-        # Remote Operations Features
-        AtherFeatureBinarySensor(
-            coordinator,
-            "atherStackRemoteCharging",
-            "Remote Charging Feature",
-            "mdi:battery-charging-wireless",
-        ),
-        AtherFeatureBinarySensor(
-            coordinator,
-            "atherStackRemoteShutdown",
-            "Remote Shutdown Feature",
-            "mdi:power",
-        ),
-        AtherFeatureBinarySensor(
-            coordinator,
-            "atherStackPingMyScooter",
-            "Find My Scooter Feature",
-            "mdi:map-marker-radius",
-        ),
-        # Advanced Vehicle Features
-        AtherFeatureBinarySensor(
-            coordinator,
-            "vehicle_smartCharging",
-            "Smart Charging Feature",
-            "mdi:battery-sync",
-        ),
-        AtherFeatureBinarySensor(
-            coordinator, "vehicle_tcsEnable", "TCS Feature", "mdi:tire"
-        ),
-        AtherFeatureBinarySensor(
-            coordinator, "vehicle_guideMeHome", "Guide Me Home", "mdi:lightbulb-on"
-        ),
-        AtherFeatureBinarySensor(
-            coordinator, "vehicle_publicCharging", "Public Charging", "mdi:ev-station"
-        ),
-        AtherFeatureBinarySensor(
-            coordinator,
-            "atherStackLiveLocation",
-            "Live Location Sharing",
-            "mdi:share-variant",
-        ),
-        AtherFeatureBinarySensor(
-            coordinator, "atherStackSportsScore", "Sports Score Widget", "mdi:trophy"
-        ),
         AtherPropertyBinarySensor(
             coordinator, "Bluetooth Status", "bt_enabled_device", "mdi:bluetooth"
         ),
     ]
+
+    # Dynamic Feature Flags Discovery
+    features = coordinator.get_data("features", {})
+    if features:
+        for feature_key, value in features.items():
+            # Check if it looks like a binary flag
+            if is_binary_value(value):
+                # Generate a readable name: "atherStackRemoteShutdown" -> "Ather Stack Remote Shutdown"
+                readable_name = (
+                    feature_key.replace("_", " ")
+                    .replace("app", "App")
+                    .replace("vehicle", "Vehicle")
+                    .replace("atherStack", "Ather Stack")
+                )
+                # Capitalize words
+                readable_name = " ".join(
+                    word.capitalize() for word in readable_name.split()
+                )
+                
+                # Check if we already have a specific class or manual entry (optional check, 
+                # but for now we just add them as generic feature sensors)
+                # We could filter out duplicates if needed, but existing specific sensors like 
+                # generic ones were already removed from the list above to be replaced by this loop.
+                
+                entities.append(
+                    AtherFeatureBinarySensor(coordinator, feature_key, readable_name)
+                )
 
     async_add_entities(entities)
 
@@ -362,6 +318,16 @@ class AtherFeatureBinarySensor(AtherBinarySensor):
 def safe_bool(value) -> bool:
     """Safely convert to bool."""
     if value in [1, "1", True, "True", "true", "On", "on"]:
+        return True
+    return False
+
+def is_binary_value(value) -> bool:
+    """Check if a value is effectively binary (0/1/True/False)."""
+    if isinstance(value, bool):
+        return True
+    if str(value).lower() in ["true", "false", "on", "off"]:
+        return True
+    if str(value) in ["0", "1"]:
         return True
     return False
 
