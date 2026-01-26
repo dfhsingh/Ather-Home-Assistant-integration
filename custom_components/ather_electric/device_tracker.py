@@ -43,6 +43,7 @@ class AtherTracker(TrackerEntity):
             hw_version=coordinator.get_data("model"),
             sw_version=f"{coordinator.get_data('UserFacingSoftwareVersion')} (v{coordinator.integration_version})",
         )
+        self._attr_entity_category = None
         _LOGGER.debug("AtherTracker initialized for %s", coordinator.scooter_id)
 
     async def async_added_to_hass(self) -> None:
