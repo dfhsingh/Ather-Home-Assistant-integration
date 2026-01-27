@@ -5,7 +5,8 @@
 Unofficial Home Assistant integration for Ather Energy electric scooters (450X, 450 Plus, etc.). This component allows you to monitor and control your scooter directly from Home Assistant.
 
 
-![alt text](image.png)
+<img width="1052" height="533" alt="image" src="https://github.com/user-attachments/assets/abd06bb0-2237-44f3-a375-1045ed84ac3e" />
+
 
 
 ## WiKi
