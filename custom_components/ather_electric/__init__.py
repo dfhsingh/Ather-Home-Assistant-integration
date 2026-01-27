@@ -19,6 +19,7 @@ from .const import (
     CONF_SCOOTER_ID,
     DOMAIN,
     PLATFORMS,
+    CONF_BASE_URL,
 )
 from .coordinator import AtherCoordinator
 
@@ -72,14 +73,23 @@ async def async_setup_entry(
     """Set up Ather Electric from a config entry."""
     scooter_id = entry.data[CONF_SCOOTER_ID]
     firebase_token = entry.data[CONF_FIREBASE_TOKEN]
+    api_token = entry.data.get("api_token")
     api_key = entry.data[CONF_FIREBASE_API_KEY]
     device_name = entry.data.get(CONF_NAME, "Ather Scooter")
+    base_url = entry.data.get(CONF_BASE_URL)
 
     integration = await async_get_integration(hass, DOMAIN)
     integration_version = integration.version
 
     coordinator = AtherCoordinator(
-        hass, scooter_id, firebase_token, api_key, device_name, integration_version
+        hass,
+        scooter_id,
+        firebase_token,
+        api_token,
+        api_key,
+        device_name,
+        integration_version,
+        base_url=base_url,
     )
 
     # Start the coordinator (WebSocket connection)

@@ -22,12 +22,21 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=20)
 
 
+class AtherAPIError(Exception):
+    """General API Error."""
+
+
+class AtherAuthError(AtherAPIError):
+    """Authentication Error (401)."""
+
+
 class AtherAPI:
     """Class to handle Ather API communications."""
 
-    def __init__(self, session: aiohttp.ClientSession) -> None:
+    def __init__(self, session: aiohttp.ClientSession, base_url: str = BASE_URL) -> None:
         """Initialize the API client."""
         self._session = session
+        self.base_url = base_url
 
     async def generate_otp(self, phone_number: str) -> bool:
         """Generate OTP for the given phone number."""
@@ -122,14 +131,8 @@ class AtherAPI:
             _LOGGER.error("Error decoding token: %s", e)
             return None
 
-    async def get_user_id(self, token: str) -> str | None:
-        """Fetch User ID from Profile."""
-        # Try local decode first
-        uid = self.get_user_id_from_token(token)
-        if uid:
-            _LOGGER.debug("Decoded User ID from token: %s", uid)
-            return uid
-
+    async def get_user_profile(self, token: str) -> dict | None:
+        """Fetch User Profile."""
         if self._session.closed:
             return None
         headers = COMMON_HEADERS.copy()
@@ -141,19 +144,39 @@ class AtherAPI:
                 if resp.status == 200:
                     data = await resp.json()
                     _LOGGER.debug("Profile Data: %s", data)
-                    return str(data.get("id"))
+                    return data
+                elif resp.status == 401:
+                    _LOGGER.warning("Get Profile 401 Unauthorized")
+                    raise AtherAuthError("Unauthorized accessing profile")
                 _LOGGER.error("Get Profile failed: %s", await resp.text())
+        except AtherAPIError:
+            raise
         except RuntimeError:
             return None
         except Exception as e:
             _LOGGER.error("Error getting profile: %s", e)
         return None
 
+    async def get_user_id(self, token: str) -> str | None:
+        """Fetch User ID from Profile (Legacy wrapper)."""
+        # Try local decode first
+        uid = self.get_user_id_from_token(token)
+        if uid:
+            _LOGGER.debug("Decoded User ID from token: %s", uid)
+            return uid
+        
+        # Fallback to API
+        profile = await self.get_user_profile(token)
+        if profile:
+            return str(profile.get("id"))
+        return None
+
     async def get_scooters(self, user_id: str, id_token: str) -> list[str] | None:
         """Fetch scooter IDs from Firebase."""
         if self._session.closed:
             return None
-        url = f"{BASE_URL}/users/{user_id}/scooters.json?auth={id_token}"
+        # Use dynamic base_url
+        url = f"{self.base_url}/users/{user_id}/scooters.json?auth={id_token}"
         try:
             async with self._session.get(url, timeout=DEFAULT_TIMEOUT) as resp:
                 if resp.status == 200:
@@ -162,7 +185,11 @@ class AtherAPI:
                     if data:
                         return list(data.keys())
                     return []
+                elif resp.status == 401:
+                    raise AtherAuthError(f"Unauthorized accessing scooters at {self.base_url}")
                 _LOGGER.error("Get Scooters failed: %s", await resp.text())
+        except AtherAPIError:
+            raise
         except RuntimeError:
             return None
         except Exception as e:
@@ -173,16 +200,21 @@ class AtherAPI:
         """Fetch details for a specific scooter."""
         if self._session.closed:
             return None
-        url = f"{BASE_URL}/scooters/{scooter_id}.json?auth={id_token}"
+        # Use dynamic base_url
+        url = f"{self.base_url}/scooters/{scooter_id}.json?auth={id_token}"
         try:
             async with self._session.get(url, timeout=DEFAULT_TIMEOUT) as resp:
                 if resp.status == 200:
                     return await resp.json()
+                elif resp.status == 401:
+                    raise AtherAuthError(f"Unauthorized accessing scooter details at {self.base_url}")
                 _LOGGER.error(
                     "Error getting scooter details: Status %s, Response: %s",
                     resp.status,
                     await resp.text(),
                 )
+        except AtherAPIError:
+            raise
         except RuntimeError:
             return None
         except Exception as e:
@@ -241,7 +273,8 @@ class AtherAPI:
         """Send a PUT request to Firebase."""
         if self._session.closed:
             return False
-        url = f"{BASE_URL}/{path}.json?auth={id_token}"
+        # Use dynamic base_url
+        url = f"{self.base_url}/{path}.json?auth={id_token}"
         try:
             async with self._session.put(
                 url, json=data, timeout=DEFAULT_TIMEOUT
@@ -249,10 +282,14 @@ class AtherAPI:
                 if resp.status == 200:
                     _LOGGER.info("PUT request to %s successful", path)
                     return True
+                elif resp.status == 401:
+                    raise AtherAuthError(f"Unauthorized PUT request to {path}")
                 else:
                     _LOGGER.error(
                         "PUT request to %s failed: %s", path, await resp.text()
                     )
+        except AtherAPIError:
+            raise
         except RuntimeError:
             return False
         except Exception as e:

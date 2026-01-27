@@ -22,6 +22,7 @@ from .const import (
     DOMAIN,
     CONF_ENABLE_RAW_LOGGING,
     DEFAULT_ENABLE_RAW_LOGGING,
+    CONF_BASE_URL,
 )
 from homeassistant.core import callback
 
@@ -40,6 +41,8 @@ class AtherConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self.firebase_token = None
         self.api_key = None
         self.user_id = None
+        self.base_url = None
+        self.name = "Ather"  # Default name
         self.scooter_ids = []
 
     async def async_step_user(
@@ -50,6 +53,7 @@ class AtherConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self.mobile_no = user_input[CONF_MOBILE_NO]
             self.api_key = user_input[CONF_FIREBASE_API_KEY]
+            self.name = user_input.get(CONF_NAME, "Ather")
             session = async_get_clientsession(self.hass)
             api = AtherAPI(session)
             if await api.generate_otp(self.mobile_no):
@@ -62,7 +66,7 @@ class AtherConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_MOBILE_NO): str,
                     vol.Required(CONF_FIREBASE_API_KEY): str,
-                    vol.Optional(CONF_NAME, default="Ather Scooter"): str,
+                    vol.Required(CONF_NAME, default="Ather"): str,
                 }
             ),
             errors=errors,
@@ -83,6 +87,25 @@ class AtherConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self.api_token = tokens.get("token")
                 self.firebase_token = tokens.get("firebase_token")
 
+                # Extract Database URL if present
+                user_db = tokens.get("userDatabase", {})
+                if user_db and "databaseUrl" in user_db:
+                    self.base_url = user_db.get("databaseUrl")
+                    # Clean the URL if it ends with /
+                    if self.base_url and self.base_url.endswith("/"):
+                        self.base_url = self.base_url[:-1]
+
+                    # CRITICAL: Update the API instance with the discovered URL immediately
+                    # so get_scooters uses the correct shard.
+                    api.base_url = self.base_url
+                    _LOGGER.info("Config Flow using Discovered Base URL: %s", self.base_url)
+                else:
+                    _LOGGER.warning("No databaseUrl found in OTP response. Using default: %s", api.base_url)
+
+                _LOGGER.debug("Tokens received. API Token (Len): %s, Firebase Token (Len): %s", 
+                              len(str(self.api_token)) if self.api_token else 0,
+                              len(str(self.firebase_token)) if self.firebase_token else 0)
+
                 # Fetch User ID from API (more reliable than OTP response)
                 self.user_id = await api.get_user_id(self.api_token)
 
@@ -97,10 +120,15 @@ class AtherConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
 
                     if id_token:
+                        _LOGGER.debug("ID Token Exchange Successful. URL for Scooters: %s", api.base_url)
                         # Fetch Scooters
-                        self.scooter_ids = await api.get_scooters(
-                            str(self.user_id), id_token
-                        )
+                        try:
+                             self.scooter_ids = await api.get_scooters(
+                                 str(self.user_id), id_token
+                             )
+                        except Exception as e:
+                             _LOGGER.error("get_scooters failed with error: %s", e)
+                             self.scooter_ids = None # ensure it falls through to error handling
 
                         if not self.scooter_ids:
                             errors["base"] = "no_vehicles_found"
@@ -151,14 +179,11 @@ class AtherConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, api: AtherAPI, scooter_id: str, id_token: str
     ):
         """Create the config entry."""
-        # Try to fetch details for cleaner name
-        details = await api.get_scooter_details(scooter_id, id_token)
-        name = "Ather Scooter"
-        if details:
-            model = details.get("model", "")
-            vin = details.get("vin", "")
-            if model:
-                name = f"Ather {model.upper()}"
+        # Use the name provided by the user (or default)
+        name = self.name
+        
+        # We NO LONGER fetch details here to avoid 401 errors.
+        # The user-provided name is the single source of truth for the title.
 
         await self.async_set_unique_id(scooter_id)
         self._abort_if_unique_id_configured()
@@ -170,6 +195,7 @@ class AtherConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_FIREBASE_TOKEN: self.firebase_token,
                 CONF_FIREBASE_API_KEY: self.api_key,
                 "api_token": self.api_token,
+                CONF_BASE_URL: self.base_url,
                 CONF_NAME: name,
             },
         )

@@ -5,9 +5,10 @@ DOMAIN = "ather_electric"
 CONF_SCOOTER_ID = "scooter_id"
 CONF_FIREBASE_TOKEN = "firebase_token"
 CONF_FIREBASE_API_KEY = "firebase_api_key"
+CONF_BASE_URL = "base_url"
 
 # WebSocket URL
-WS_URL = "wss://ather-production-mu.firebaseio.com/.ws?v=5"
+WS_URL = "wss://ather-production.firebaseio.com/.ws?v=5"
 
 # Platforms
 PLATFORMS = ["sensor", "device_tracker", "binary_sensor", "button", "switch"]
@@ -16,7 +17,7 @@ CONF_MOBILE_NO = "mobile_no"
 CONF_OTP = "otp"
 
 # API URLs
-BASE_URL = "https://ather-production-mu.firebaseio.com"
+BASE_URL = "https://ather-production.firebaseio.com"
 GENERATE_OTP_URL = "https://cerberus.ather.io/auth/v2/generate-login-otp"
 VERIFY_OTP_URL = "https://cerberus.ather.io/auth/v2/verify-login-otp"
 TOKEN_VERIFY_URL = (

@@ -16,13 +16,13 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 import datetime
 
-from .api import AtherAPI
 from .const import (
     WS_URL,
     DOMAIN,
     CONF_ENABLE_RAW_LOGGING,
     DEFAULT_ENABLE_RAW_LOGGING,
 )
+from .api import AtherAPI, AtherAuthError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,15 +36,18 @@ class AtherCoordinator:
         hass: HomeAssistant,
         scooter_id: str,
         firebase_token: str,
+        api_token: str,
         api_key: str,
         device_name: str,
         integration_version: str = "0.0.0",
+        base_url: str | None = None,
     ) -> None:
         """Initialize the coordinator."""
         self.hass = hass
         # ... (other init params)
         self.scooter_id = scooter_id
         self.firebase_token = firebase_token
+        self.api_token = api_token
         self.api_key = api_key
         self.device_name = device_name
         self.integration_version = integration_version
@@ -54,6 +57,12 @@ class AtherCoordinator:
         self._listeners: list = []
         self.session = async_get_clientsession(hass)
         self.api = AtherAPI(self.session)
+
+        # Set base URL if provided in config
+        if base_url:
+            self.api.base_url = base_url
+            _LOGGER.info("Using configured Base URL: %s", base_url)
+
         self._shutdown = False
         self.shutdown_safe_mode = True
         self.last_update_success = False
@@ -63,6 +72,8 @@ class AtherCoordinator:
 
         # Token Management
         self.refresh_token: Optional[str] = None
+        self._id_token: Optional[str] = None
+        self._id_token_expires_at: float = 0
 # ... (rest of init)
         self.token_file = hass.config.path(".ather_tokens.json")
         self._ready_event = asyncio.Event()
@@ -74,8 +85,6 @@ class AtherCoordinator:
 
         # Rate Limiting & Backoff
         self._last_remote_command_time = 0
-        self._last_scooter_details_fetch = 0
-        self._details_cache = None
         self._backoff_delay = 10  # Initial delay
 
         # State tracking
@@ -255,6 +264,10 @@ class AtherCoordinator:
 
     async def get_id_token(self) -> Optional[str]:
         """Get a valid ID token, refreshing if necessary."""
+        # Check cache validity (with 60s buffer)
+        if self._id_token and time.time() < self._id_token_expires_at - 60:
+            return self._id_token
+
         if self.refresh_token:
             token = await self._refresh_id_token()
             if token:
@@ -276,7 +289,12 @@ class AtherCoordinator:
             if new_refresh:
                 self.refresh_token = new_refresh
                 await self.hass.async_add_executor_job(self._save_tokens)
-            return data.get("id_token")
+            
+            self._id_token = data.get("id_token")
+            expires_in = data.get("expires_in", "3600")
+            self._id_token_expires_at = time.time() + int(expires_in)
+            _LOGGER.info("Refreshed ID Token. Expires in %s seconds.", expires_in)
+            return self._id_token
         return None
 
     async def _exchange_custom_token(self) -> Optional[str]:
@@ -289,6 +307,11 @@ class AtherCoordinator:
             if refresh_token:
                 self.refresh_token = refresh_token
                 await self.hass.async_add_executor_job(self._save_tokens)
+
+            self._id_token = id_token
+            expires_in = data.get("expiresIn", "3600")
+            self._id_token_expires_at = time.time() + int(expires_in)
+            _LOGGER.info("Exchanged Custom Token. Expires in %s seconds.", expires_in)
 
             return id_token
         return None
@@ -317,56 +340,106 @@ class AtherCoordinator:
                     await asyncio.sleep(60)
                     continue
 
-                # DEBUG: Fetch User ID and Scooter List to verify account/shard
+                # DEBUG: Fetch User Profile to get Dynamic Base URL
+                found_url = None
+                uid = None
+                
                 try:
-                    _LOGGER.info("DEBUG: Fetching Profile and Scooter List...")
-                    uid = await self.api.get_user_id(id_token)
-                    if uid:
-                        scooters = await self.api.get_scooters(uid, id_token)
-                        _LOGGER.info("DEBUG: User ID: %s, Scooters: %s", uid, scooters)
+                    # Use api_token for Profile Fetch (Cerberus API)
+                    profile = await self.api.get_user_profile(self.api_token)
+                    if profile:
+                        uid = str(profile.get("id"))
+                        _LOGGER.info("User ID from Profile: %s", uid)
+                        
+                        # Check keys for URL
+                        for k, v in profile.items():
+                           if isinstance(v, str) and "firebaseio.com" in v:
+                               found_url = v
+                               break
+                        
+                        if found_url:
+                             if found_url.endswith("/"):
+                                 found_url = found_url[:-1]
+                             
+                             if found_url != self.api.base_url:
+                                 _LOGGER.info("Updating BASE_URL from Profile: %s", found_url)
+                                 self.api.base_url = found_url
+
+                except AtherAuthError:
+                     _LOGGER.warning("Auth Error fetching profile (401). Continuing with cached/decoded UID and default URL candidates.")
                 except Exception as e:
-                    _LOGGER.error("DEBUG: Failed to fetch profile/scooters: %s", e)
+                    _LOGGER.error("DEBUG: Failed to fetch profile: %s", e)
 
-                # Fetch full state via HTTP to ensure initial freshness
-                # This helps if WebSocket sends stale cached data initially.
+                # Fallback: Get UID from Token if Profile failed
+                if not uid:
+                    uid = self.api.get_user_id_from_token(id_token)
+                    if uid:
+                        _LOGGER.info("User ID decoded from Token: %s", uid)
+                    else:
+                        _LOGGER.error("Could not obtain User ID (Profile failed & Token decode failed). Retrying later.")
+                        await asyncio.sleep(60)
+                        continue
+
                 try:
-                    current_time = time.time()
-                    if (
-                        self._details_cache
-                        and (current_time - self._last_scooter_details_fetch) < 300
-                    ):
-                        _LOGGER.info("Using cached scooter details (TTL 5m)")
-                        full_data = self._details_cache
-                    else:
-                        _LOGGER.info("Fetching full scooter state via HTTP...")
-                        full_data = await self.api.get_scooter_details(
-                            self.scooter_id, id_token
-                        )
-                        if full_data:
-                            self._details_cache = full_data
-                            self._last_scooter_details_fetch = current_time
+                     # Logic:
+                        # 1. Start with hardcoded candidates.
+                        # 2. If we found a URL in the profile, trying that FIRST.
+                        # 3. CRITICAL: If a base_url was configured (from OTP), we rely on that heavily.
+                        # The api.base_url is already set in __init__ if provided. 
+                        # If it's set, we should probably stick to it or put it first.
+                        
+                        candidate_urls = [
+                             "https://ather-production.firebaseio.com",
+                             "https://ather-production-mu.firebaseio.com",
+                        ]
+                        
+                        # If we have a configured base_url (from init), make sure it's the first candidate
+                        if self.api.base_url and self.api.base_url not in candidate_urls:
+                             _LOGGER.info("Adding configured/current Base URL to candidate list: %s", self.api.base_url)
+                             candidate_urls.insert(0, self.api.base_url)
+                        elif self.api.base_url and self.api.base_url in candidate_urls:
+                             # Move to front
+                             candidate_urls.remove(self.api.base_url)
+                             candidate_urls.insert(0, self.api.base_url)
 
-                    if full_data:
-                        _LOGGER.debug(
-                            "HTTP Fetch successful. Keys: %s", list(full_data.keys())
-                        )
-                        # Log details to check for shard info
-                        _LOGGER.info(
-                            "DEBUG: Scooter Details Metadata: %s",
-                            full_data.get("details"),
-                        )
-                        self._process_data(full_data)
-                        self._notify_listeners()
-                    else:
-                        _LOGGER.warning("HTTP Fetch returned no data.")
-                        # If HTTP fetch fails, we should probably treat this as a failure point
-                        # giving us a reason to backoff if WS also fails immediately.
-                        # However, for now, we just proceed to try WS, but maybe we should sleep if it failed?
-                        # Let's not block here, but we'll monitor the loop.
-                        pass # relying on coordinator loop backoff if ws fails
+                        if found_url and found_url not in candidate_urls:
+                             _LOGGER.info("Adding discovered Profile URL to candidate list: %s", found_url)
+                             candidate_urls.insert(0, found_url)
+                        
+                        # We will try the candidates.
+                        shard_found = False
+                        
+                        for candidate_url in candidate_urls:
+                             self.api.base_url = candidate_url
+                             try:
+                                 _LOGGER.info("Attempting connection to shard: %s", candidate_url)
+                                 scooters = await self.api.get_scooters(uid, id_token)
+                                 if scooters is not None:
+                                      _LOGGER.info("Connected successfully to shard: %s (Scooters: %s)", candidate_url, scooters)
+                                      shard_found = True
+                                      break # Success!
+                             except AtherAuthError:
+                                 _LOGGER.warning("Auth failed (401) on shard: %s. Trying next...", candidate_url)
+                                 continue
+                             except Exception as exc:
+                                 _LOGGER.warning("Error connecting to shard %s: %s", candidate_url, exc)
+                                 continue
 
-                except Exception as httperr:
-                    _LOGGER.error("HTTP Fetch failed: %s", httperr)
+                        if not shard_found:
+                             _LOGGER.error("Failed to connect to ANY known shard. Invalidating token and retrying later.")
+                             self._id_token = None # Force fresh token next time
+                             await asyncio.sleep(5)
+                             continue
+
+
+                except AtherAuthError:
+                     _LOGGER.warning("Auth Error fetching scooters. Invalidating token locally.")
+                     self._id_token = None
+                     await asyncio.sleep(1)
+                     continue
+                except Exception as e:
+                    _LOGGER.error("DEBUG: Failed to fetch scooters: %s", e)
+
 
                 # Simulate Android Client to avoid potential blocking
                 ws_headers = {
