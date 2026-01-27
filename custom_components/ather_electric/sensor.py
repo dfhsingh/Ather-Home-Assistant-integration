@@ -120,6 +120,9 @@ async def async_setup_entry(
     features = coordinator.get_data("features", {})
     if features:
         for feature_key, value in features.items():
+            if feature_key.startswith("app_"):
+                continue
+            
             # Check if it looks like a NON-binary flag (values like 79, 110, etc.)
             if not is_binary_value(value):
                 # Generate a readable name

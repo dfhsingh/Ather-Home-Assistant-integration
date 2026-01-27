@@ -415,8 +415,8 @@ class AtherCoordinator:
                     _LOGGER.debug("Auth Payload Sent. Entering message loop.")
 
                     # Subscriptions
-                    # Subscriptions
                     paths = [
+                        f"/scooters/{self.scooter_id}",
                         f"/scooters/{self.scooter_id}/bike",
                         f"/scooters/{self.scooter_id}/charging",
                         f"/scooters/{self.scooter_id}/app",

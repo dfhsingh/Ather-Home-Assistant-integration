@@ -43,6 +43,9 @@ async def async_setup_entry(
     features = coordinator.get_data("features", {})
     if features:
         for feature_key, value in features.items():
+            if feature_key.startswith("app_"):
+                continue
+
             # Check if it looks like a binary flag
             if is_binary_value(value):
                 # Generate a readable name: "atherStackRemoteShutdown" -> "Ather Stack Remote Shutdown"
