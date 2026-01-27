@@ -9,6 +9,8 @@ An unofficial Home Assistant integration for Ather Energy electric scooters (450
 
 This project started with a simple goal: **Automated Charging.** I wanted to park my Ather, plug it in, and let Home Assistant decide when to start or stop charging based on the Battery SoC. Once I cracked the API, I couldn't stop—and this full-fledged integration was born. It is now stable and part of my daily routine.
 
+Cherry on top, Ather released Remote Charging Start/Stop feature and saved me from buying smart plug.
+
 > [!TIP]
 > While developed and tested on an **Ather 450X**, the shared API architecture should support other models like the 450 Plus, 450S, Rizta and Apex.
 
