@@ -359,6 +359,12 @@ class AtherCoordinator:
                         self._notify_listeners()
                     else:
                         _LOGGER.warning("HTTP Fetch returned no data.")
+                        # If HTTP fetch fails, we should probably treat this as a failure point
+                        # giving us a reason to backoff if WS also fails immediately.
+                        # However, for now, we just proceed to try WS, but maybe we should sleep if it failed?
+                        # Let's not block here, but we'll monitor the loop.
+                        pass # relying on coordinator loop backoff if ws fails
+
                 except Exception as httperr:
                     _LOGGER.error("HTTP Fetch failed: %s", httperr)
 
@@ -389,6 +395,9 @@ class AtherCoordinator:
                     await asyncio.sleep(0.5)
                     if ws.closed:
                         _LOGGER.warning("WebSocket closed immediately after connection.")
+                        # Force a small backoff if we close immediately to prevent tight loop
+                        await asyncio.sleep(self._backoff_delay)
+                        self._backoff_delay = min(60, self._backoff_delay * 2) 
                         continue
 
                     # Authenticate

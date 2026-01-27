@@ -178,6 +178,11 @@ class AtherAPI:
             async with self._session.get(url, timeout=DEFAULT_TIMEOUT) as resp:
                 if resp.status == 200:
                     return await resp.json()
+                _LOGGER.error(
+                    "Error getting scooter details: Status %s, Response: %s",
+                    resp.status,
+                    await resp.text(),
+                )
         except RuntimeError:
             return None
         except Exception as e:
