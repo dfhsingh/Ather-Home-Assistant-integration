@@ -1,61 +1,75 @@
+
 # Ather Electric Home Assistant Integration
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 
-Unofficial Home Assistant integration for Ather Energy electric scooters (450X, 450 Plus, etc.). This component allows you to monitor and control your scooter directly from Home Assistant.
+An unofficial Home Assistant integration for Ather Energy electric scooters (450X, 450 Plus, etc.). Monitor and manage your scooter's data directly within your smart home dashboard.
 
+## The Backstory
 
-![alt text](image.png)
+This project started with a simple goal: **Automated Charging.** I wanted to park my Ather, plug it in, and let Home Assistant decide when to start or stop charging based on the Battery SoC. Once I cracked the API, I couldn't stop—and this full-fledged integration was born. It is now stable and part of my daily routine.
 
-## Features
+Cherry on top, Ather released Remote Charging Start/Stop feature and saved me from buying smart plug.
 
-- **Real-time Stats**: State of Charge (SoC), Range (Eco, Ride, Sport, Warp), Battery State, Charging Status.
-- **Location Tracking**: Device tracker for scooter location.
-- **Remote Controls**: (Experimental) Ping, Remote Charge, Shutdown (if enabled on your scooter/account).
-- **Sensors**: Odometer, Trip details, Time remaining to charge.
+> [!TIP]
+> While developed and tested on an **Ather 450X**, the shared API architecture should support other models like the 450 Plus, 450S, Rizta and Apex.
 
-## Installation
+<img width="1052" height="533" alt="image" src="https://github.com/user-attachments/assets/abd06bb0-2237-44f3-a375-1045ed84ac3e" />
 
-### HACS (Recommended)
+## 🚀 Features
 
-1. Open HACS in Home Assistant.
-2. Go to "Integrations".
-3. Click the three dots in the top right corner and select "Custom repositories".
-4. Add the URL of this repository.
-5. Select "Integration" as the category.
-6. Click "Add" and then install the integration.
-7. Restart Home Assistant.
+* **Real-time Diagnostics**: State of Charge (SoC), Battery Health, and Charging Status.
+* **Dynamic Range**: Live estimates for Eco, Ride, Sport, and Warp/Apex modes.
+* **Location Tracking**: Integrated `device_tracker` to monitor your scooter’s position.
+* **Advanced Sensors**: Odometer, trip details, and "Time to Full" estimates.
+* **Remote Controls (Experimental)**: Ping, Remote Charge, and Shutdown (hardware/account dependent).
 
-### Manual Installation
+> [!TIP]
+> The diagnostic entities will let you know which all 'features' are active (and inactive) based on the model and subscriptions
 
-1. Download the `ather_electric` folder from the `custom_components` directory in this repository.
-2. Copy the `ather_electric` folder to your Home Assistant `custom_components` directory.
+## 🛠 Installation
+
+### Option 1: HACS (Recommended)
+
+1. Open **HACS** > **Integrations**.
+2. Select **Custom repositories** from the top-right menu.
+3. Paste this repository URL and select **Integration** as the category.
+4. Click **Install** and restart Home Assistant.
+
+### Option 2: Manual
+
+1. Download the `custom_components/ather_electric` folder.
+2. Copy it into your Home Assistant `/config/custom_components/` directory.
 3. Restart Home Assistant.
 
-## Configuration
+## ⚙️ Configuration
 
-1. Go to **Settings** > **Devices & Services**.
-2. Click **+ ADD INTEGRATION**.
-3. Search for "Ather Electric".
-4. Enter your Ather registered Phone Number, key* and OTP 
+1. Navigate to **Settings** > **Devices & Services**.
+2. Click **Add Integration** and search for **Ather Electric**.
+3. Enter your registered phone number, Firebase Key*, and the OTP received.
 
-> [!NOTE]
-> Required key is to identify Ather server, its available in mobile app source, you need to decompile app to get the key.
-5. Follow the prompts to complete proper setup.
+> [!IMPORTANT]
+> **Regarding the Firebase Key:** To communicate with Ather’s servers, a specific application key is required. This is typically retrieved by decompiling the official mobile app.
 
-## Entities
+## 📊 Entities
 
-The integration creates several entities including:
-- `sensor.ather_soc`: Battery percentage.
-- `sensor.ather_range_*`: Range estimates for different modes.
-- `binary_sensor.ather_charging`: Charging status.
-- `device_tracker.ather_scooter`: Location of the scooter.
+| Entity | Description |
+| --- | --- |
+| `sensor.ather_soc` | Current battery percentage |
+| `sensor.ather_range_*` | Range estimates for all ride modes |
+| `binary_sensor.ather_charging` | Indicates if the charger is active |
+| `device_tracker.ather_scooter` | GPS location of the vehicle |
 
-## WiKi
+---
 
-For tips and tricks [Go to Wiki pages](https://github.com/dfhsingh/Ather-Home-Assistant-integration/wiki)
+## 📖 Documentation & Support
 
+Check out the **[Wiki](https://github.com/dfhsingh/Ather-Home-Assistant-integration/wiki)** for:
+
+* Sample Automation configs (like the Auto-Charging setup).
+* Frequently Asked Questions.
+* Advanced troubleshooting.
 
 ## Disclaimer
 
-This is an unofficial integration and is not affiliated with Ather Energy. Use it at your own risk.
+This is an unofficial community project. It is not affiliated with, endorsed by, or supported by Ather Energy. Use this integration at your own risk.
