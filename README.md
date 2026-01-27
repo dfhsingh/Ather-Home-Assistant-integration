@@ -7,6 +7,12 @@ Unofficial Home Assistant integration for Ather Energy electric scooters (450X, 
 
 ![alt text](image.png)
 
+
+## WiKi
+
+For tips, tricks, FAQ's and smaple configs  [Go to Wiki pages](https://github.com/dfhsingh/Ather-Home-Assistant-integration/wiki)
+
+
 ## Features
 
 - **Real-time Stats**: State of Charge (SoC), Range (Eco, Ride, Sport, Warp), Battery State, Charging Status.
@@ -50,10 +56,6 @@ The integration creates several entities including:
 - `sensor.ather_range_*`: Range estimates for different modes.
 - `binary_sensor.ather_charging`: Charging status.
 - `device_tracker.ather_scooter`: Location of the scooter.
-
-## WiKi
-
-For tips and tricks [Go to Wiki pages](https://github.com/dfhsingh/Ather-Home-Assistant-integration/wiki)
 
 
 ## Disclaimer
