@@ -44,7 +44,7 @@ For tips, tricks, FAQ's and sample configs  [Go to Wiki pages](https://github.co
 1. Go to **Settings** > **Devices & Services**.
 2. Click **+ ADD INTEGRATION**.
 3. Search for "Ather Electric".
-4. Enter your Ather registered Phone Number, key* and OTP 
+4. Enter your Ather registered Phone Number, Key* and OTP 
 
 > [!NOTE]
 > Required key is to identify Ather server, its available in mobile app source, you need to decompile app to get the key.
