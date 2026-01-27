@@ -827,8 +827,12 @@ class AtherCoordinator:
                     "ShutdownVacationMode",
                     "parkingAssist",
                     "UserFacingSoftwareVersion",
+                    "cruiseControl",
+                    "smartEcoStatus",
                 ],
             )
+            if "VIN" in bike:
+                self.data["vin"] = bike["VIN"]  # Map uppercase VIN to lowercase vin for sensor
             if "GPSLocation" in bike:
                 self._update_gps(bike["GPSLocation"])
 
@@ -837,6 +841,11 @@ class AtherCoordinator:
         app = self.data.get("app", {})
         if app:
             flatten_keys(app, ["modeRange", "features", "savings"])
+
+        # Flatten 'charging' fields
+        charging = self.data.get("charging", {})
+        if charging:
+            flatten_keys(charging, ["chargerType"])
 
         # Check if 'features' is now at root (from app flattening or direct) and flatten feature flags
         if "features" in self.data:
