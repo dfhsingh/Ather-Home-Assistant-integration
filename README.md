@@ -11,7 +11,7 @@ Unofficial Home Assistant integration for Ather Energy electric scooters (450X, 
 
 ## WiKi
 
-For tips, tricks, FAQ's and smaple configs  [Go to Wiki pages](https://github.com/dfhsingh/Ather-Home-Assistant-integration/wiki)
+For tips, tricks, FAQ's and sample configs  [Go to Wiki pages](https://github.com/dfhsingh/Ather-Home-Assistant-integration/wiki)
 
 
 ## Features
