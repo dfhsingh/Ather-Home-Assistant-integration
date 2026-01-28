@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import time
+import urllib.parse
 from typing import Any, Dict, Optional
 
 import aiohttp
@@ -21,11 +22,11 @@ from .const import (
     DOMAIN,
     CONF_ENABLE_RAW_LOGGING,
     DEFAULT_ENABLE_RAW_LOGGING,
+    BASE_URL,
 )
 from .api import AtherAPI, AtherAuthError
 
 _LOGGER = logging.getLogger(__name__)
-
 
 
 class AtherCoordinator:
@@ -74,7 +75,7 @@ class AtherCoordinator:
         self.refresh_token: Optional[str] = None
         self._id_token: Optional[str] = None
         self._id_token_expires_at: float = 0
-# ... (rest of init)
+        # ... (rest of init)
         self.token_file = hass.config.path(".ather_tokens.json")
         self._ready_event = asyncio.Event()
 
@@ -289,7 +290,7 @@ class AtherCoordinator:
             if new_refresh:
                 self.refresh_token = new_refresh
                 await self.hass.async_add_executor_job(self._save_tokens)
-            
+
             self._id_token = data.get("id_token")
             expires_in = data.get("expires_in", "3600")
             self._id_token_expires_at = time.time() + int(expires_in)
@@ -343,30 +344,34 @@ class AtherCoordinator:
                 # DEBUG: Fetch User Profile to get Dynamic Base URL
                 found_url = None
                 uid = None
-                
+
                 try:
                     # Use api_token for Profile Fetch (Cerberus API)
                     profile = await self.api.get_user_profile(self.api_token)
                     if profile:
                         uid = str(profile.get("id"))
                         _LOGGER.info("User ID from Profile: %s", uid)
-                        
+
                         # Check keys for URL
                         for k, v in profile.items():
-                           if isinstance(v, str) and "firebaseio.com" in v:
-                               found_url = v
-                               break
-                        
+                            if isinstance(v, str) and "firebaseio.com" in v:
+                                found_url = v
+                                break
+
                         if found_url:
-                             if found_url.endswith("/"):
-                                 found_url = found_url[:-1]
-                             
-                             if found_url != self.api.base_url:
-                                 _LOGGER.info("Updating BASE_URL from Profile: %s", found_url)
-                                 self.api.base_url = found_url
+                            if found_url.endswith("/"):
+                                found_url = found_url[:-1]
+
+                            if found_url != self.api.base_url:
+                                _LOGGER.info(
+                                    "Updating BASE_URL from Profile: %s", found_url
+                                )
+                                self.api.base_url = found_url
 
                 except AtherAuthError:
-                     _LOGGER.warning("Auth Error fetching profile (401). Continuing with cached/decoded UID and default URL candidates.")
+                    _LOGGER.warning(
+                        "Auth Error fetching profile (401). Continuing with cached/decoded UID and default URL candidates."
+                    )
                 except Exception as e:
                     _LOGGER.error("DEBUG: Failed to fetch profile: %s", e)
 
@@ -376,88 +381,159 @@ class AtherCoordinator:
                     if uid:
                         _LOGGER.info("User ID decoded from Token: %s", uid)
                     else:
-                        _LOGGER.error("Could not obtain User ID (Profile failed & Token decode failed). Retrying later.")
+                        _LOGGER.error(
+                            "Could not obtain User ID (Profile failed & Token decode failed). Retrying later."
+                        )
                         await asyncio.sleep(60)
                         continue
 
                 try:
-                     # Logic:
-                        # 1. Start with hardcoded candidates.
-                        # 2. If we found a URL in the profile, trying that FIRST.
-                        # 3. CRITICAL: If a base_url was configured (from OTP), we rely on that heavily.
-                        # The api.base_url is already set in __init__ if provided. 
-                        # If it's set, we should probably stick to it or put it first.
-                        
-                        candidate_urls = [
-                             "https://ather-production.firebaseio.com",
-                             "https://ather-production-mu.firebaseio.com",
-                        ]
-                        
-                        # If we have a configured base_url (from init), make sure it's the first candidate
-                        if self.api.base_url and self.api.base_url not in candidate_urls:
-                             _LOGGER.info("Adding configured/current Base URL to candidate list: %s", self.api.base_url)
-                             candidate_urls.insert(0, self.api.base_url)
-                        elif self.api.base_url and self.api.base_url in candidate_urls:
-                             # Move to front
-                             candidate_urls.remove(self.api.base_url)
-                             candidate_urls.insert(0, self.api.base_url)
+                    # Logic:
+                    # 1. Start with hardcoded candidates.
+                    # 2. If we found a URL in the profile, trying that FIRST.
+                    # 3. CRITICAL: If a base_url was configured (from OTP), we rely on that heavily.
+                    # The api.base_url is already set in __init__ if provided.
+                    # If it's set, we should probably stick to it or put it first.
 
-                        if found_url and found_url not in candidate_urls:
-                             _LOGGER.info("Adding discovered Profile URL to candidate list: %s", found_url)
-                             candidate_urls.insert(0, found_url)
-                        
-                        # We will try the candidates.
-                        shard_found = False
-                        
-                        for candidate_url in candidate_urls:
-                             self.api.base_url = candidate_url
-                             try:
-                                 _LOGGER.info("Attempting connection to shard: %s", candidate_url)
-                                 scooters = await self.api.get_scooters(uid, id_token)
-                                 if scooters is not None:
-                                      _LOGGER.info("Connected successfully to shard: %s (Scooters: %s)", candidate_url, scooters)
-                                      shard_found = True
-                                      break # Success!
-                             except AtherAuthError:
-                                 _LOGGER.warning("Auth failed (401) on shard: %s. Trying next...", candidate_url)
-                                 continue
-                             except Exception as exc:
-                                 _LOGGER.warning("Error connecting to shard %s: %s", candidate_url, exc)
-                                 continue
+                    candidate_urls = [
+                        "https://ather-production.firebaseio.com",
+                        "https://ather-production-mu.firebaseio.com",
+                    ]
 
-                        if not shard_found:
-                             _LOGGER.error("Failed to connect to ANY known shard. Invalidating token and retrying later.")
-                             self._id_token = None # Force fresh token next time
-                             await asyncio.sleep(5)
-                             continue
+                    # If we have a configured base_url (from init), make sure it's the first candidate
+                    if self.api.base_url and self.api.base_url not in candidate_urls:
+                        _LOGGER.info(
+                            "Adding configured/current Base URL to candidate list: %s",
+                            self.api.base_url,
+                        )
+                        candidate_urls.insert(0, self.api.base_url)
+                    elif self.api.base_url and self.api.base_url in candidate_urls:
+                        # Move to front
+                        candidate_urls.remove(self.api.base_url)
+                        candidate_urls.insert(0, self.api.base_url)
 
+                    if found_url and found_url not in candidate_urls:
+                        _LOGGER.info(
+                            "Adding discovered Profile URL to candidate list: %s",
+                            found_url,
+                        )
+                        candidate_urls.insert(0, found_url)
+
+                    # We will try the candidates.
+                    shard_found = False
+
+                    # Fix for Split Shards:
+                    # User Data (scooters list) is ALWAYS on the Main Router (ather-production).
+                    # Scooter Data (details) is on a specific Shard (s-gke...).
+                    # So we MUST validate Auth against the Router, not the Candidate/Redirected URL.
+                    for candidate_url in candidate_urls:
+                        # We rarely need to change self.api.base_url here anymore,
+                        # because validation uses override_base_url=BASE_URL.
+                        # But we log what we are "connecting" to conceptually.
+                        try:
+                            _LOGGER.info(
+                                "Attempting auth check on Main Router (for shard candidate: %s)",
+                                candidate_url,
+                            )
+                            # We force checking against the Main Router because that's where User-Vehicle mapping lives.
+                            scooters = await self.api.get_scooters(
+                                uid, id_token, override_base_url=BASE_URL
+                            )
+                            if scooters is not None:
+                                _LOGGER.info(
+                                    "Auth success on Router. Connected concept to: %s",
+                                    candidate_url,
+                                )
+                                shard_found = True
+                                # If we are just starting and haven't redirected yet,
+                                # self.api.base_url might still be default. That's fine.
+                                break  # Success!
+                        except AtherAuthError:
+                            _LOGGER.warning(
+                                "Auth failed (401) on Router. Token might be invalid."
+                            )
+                            continue
+                        except Exception as exc:
+                            _LOGGER.warning("Error checking auth on Router: %s", exc)
+                            # This is the original warning from the old code, kept for consistency in case of other exceptions
+                            _LOGGER.warning(
+                                "Error connecting to shard %s: %s", candidate_url, exc
+                            )
+                            continue
+
+                    if not shard_found:
+                        _LOGGER.error(
+                            "Failed to connect to ANY known shard. Invalidating token and retrying later."
+                        )
+                        self._id_token = None  # Force fresh token next time
+                        await asyncio.sleep(5)
+                        continue
+
+                    # --- (RESTORED & IMPROVED) API Call for Initial Data ---
+                    # We only attempt this call if we have definitely moved AWAY from the default "router" shard.
+                    # The default shard (ather-production) usually 401s on this deep path.
+                    # We wait for the WebSocket Redirect to give us the specific shard (e.g. ather-production-mu)
+                    # and then this block will run on the NEXT reconnect iteration.
+                    if self.api.base_url != BASE_URL:
+                        try:
+                            _LOGGER.info(
+                                "Fetching full scooter details via REST (Shard: %s) to populate initial state...",
+                                self.api.base_url,
+                            )
+                            # This call uses self.api.base_url which SHOULD be the Redirected Shard (s-gke...)
+                            initial_data = await self.api.get_scooter_details(
+                                self.scooter_id, id_token
+                            )
+                            if initial_data:
+                                _LOGGER.info(
+                                    "Successfully fetched initial data. Keys: %s",
+                                    list(initial_data.keys()),
+                                )
+                                self._process_data(initial_data)
+                                self._notify_listeners()
+                            else:
+                                _LOGGER.warning(
+                                    "Initial REST fetch returned empty/None."
+                                )
+                        except AtherAuthError:
+                            _LOGGER.warning(
+                                "Auth Error (401) fetching initial details. Likely wrong shard. Proceeding to WS for redirect."
+                            )
+                        except Exception as e:
+                            _LOGGER.error(
+                                "Error fetching initial scooter details: %s", e
+                            )
+                    else:
+                        _LOGGER.info(
+                            "Skipping initial REST fetch on default router shard (%s). Waiting for WS Redirect.",
+                            self.api.base_url,
+                        )
+                    # ------------------------------------------
 
                 except AtherAuthError:
-                     _LOGGER.warning("Auth Error fetching scooters. Invalidating token locally.")
-                     self._id_token = None
-                     await asyncio.sleep(1)
-                     continue
+                    _LOGGER.warning(
+                        "Auth Error fetching scooters. Invalidating token locally."
+                    )
+                    self._id_token = None
+                    await asyncio.sleep(1)
+                    continue
                 except Exception as e:
                     _LOGGER.error("DEBUG: Failed to fetch scooters: %s", e)
 
-
                 # Simulate Android Client to avoid potential blocking
-                ws_headers = {
-                    "User-Agent": "okhttp/4.9.3" 
-                }
+                ws_headers = {"User-Agent": "okhttp/4.9.3"}
 
                 # Add receive_timeout to detect silent/hanging servers
                 async with self.session.ws_connect(
-                    self.current_ws_url, 
-                    headers=ws_headers, 
-                    
+                    self.current_ws_url,
+                    headers=ws_headers,
                     receive_timeout=600,
                 ) as ws:
                     self.ws = ws
                     _LOGGER.info("Connected to Ather WebSocket")
                     self.last_update_success = True
                     self._reconnect_requested = False  # Reset flag on new connection
-                    
+
                     # NOTE: We do NOT reset _consecutive_failures or _backoff_delay here.
                     # We wait until we successfully receive a message to call it a "stable" connection.
                     # This prevents infinite loops if we connect but crash immediately.
@@ -467,10 +543,12 @@ class AtherCoordinator:
                     # Stabilization delay to avoid immediate closure race conditions
                     await asyncio.sleep(0.5)
                     if ws.closed:
-                        _LOGGER.warning("WebSocket closed immediately after connection.")
+                        _LOGGER.warning(
+                            "WebSocket closed immediately after connection."
+                        )
                         # Force a small backoff if we close immediately to prevent tight loop
                         await asyncio.sleep(self._backoff_delay)
-                        self._backoff_delay = min(60, self._backoff_delay * 2) 
+                        self._backoff_delay = min(60, self._backoff_delay * 2)
                         continue
 
                     # Authenticate
@@ -480,19 +558,19 @@ class AtherCoordinator:
                     }
                     if _LOGGER.isEnabledFor(logging.DEBUG):
                         _LOGGER.debug("Sending Auth Payload")
-                    
+
                     if ws.closed:
-                         _LOGGER.warning("WebSocket closed before Auth.")
-                         continue
+                        _LOGGER.warning("WebSocket closed before Auth.")
+                        continue
 
                     try:
                         async with asyncio.timeout(5):
                             await ws.send_json(auth_payload)
                     except TimeoutError:
-                         _LOGGER.warning("Timeout sending Auth Payload. Resetting URL.")
-                         self.current_ws_url = WS_URL
-                         self._consecutive_failures = 0
-                         continue
+                        _LOGGER.warning("Timeout sending Auth Payload. Resetting URL.")
+                        self.current_ws_url = WS_URL
+                        self._consecutive_failures = 0
+                        continue
 
                     _LOGGER.debug("Auth Payload Sent. Entering message loop.")
 
@@ -504,6 +582,7 @@ class AtherCoordinator:
                         f"/scooters/{self.scooter_id}/app",
                         f"/scooters/{self.scooter_id}/tpms",
                         f"/scooters/{self.scooter_id}/lastSyncedTime",
+                        f"/scooters/{self.scooter_id}/features",
                     ]
 
                     for idx, path in enumerate(paths, start=2):
@@ -516,10 +595,12 @@ class AtherCoordinator:
                             async with asyncio.timeout(5):
                                 await ws.send_json(sub_payload)
                         except TimeoutError:
-                             _LOGGER.warning("Timeout sending Subscription. Resetting URL.")
-                             self.current_ws_url = WS_URL
-                             self._consecutive_failures = 0
-                             break # Break inner loop to trigger outer loop continue/retry logic
+                            _LOGGER.warning(
+                                "Timeout sending Subscription. Resetting URL."
+                            )
+                            self.current_ws_url = WS_URL
+                            self._consecutive_failures = 0
+                            break  # Break inner loop to trigger outer loop continue/retry logic
 
                     async for msg in ws:
                         if self._shutdown or self.hass.is_stopping:
@@ -527,7 +608,9 @@ class AtherCoordinator:
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             await self._handle_message(msg.data)
                             if self._reconnect_requested:
-                                _LOGGER.info("Redirect requested, closing current connection.")
+                                _LOGGER.info(
+                                    "Redirect requested, closing current connection."
+                                )
                                 break
                         elif msg.type == aiohttp.WSMsgType.ERROR:
                             _LOGGER.error("WebSocket error: %s", msg.data)
@@ -538,9 +621,13 @@ class AtherCoordinator:
                 self._shutdown = True
                 break
             except asyncio.TimeoutError:
-                _LOGGER.warning("WebSocket connection timed out (no data received). Resetting to default URL.")
+                _LOGGER.warning(
+                    "WebSocket connection timed out (no data received). Resetting to default URL."
+                )
                 self.current_ws_url = WS_URL
-                self._consecutive_failures = 0 # reset because we are manually resetting URL to fresh state
+                self._consecutive_failures = (
+                    0  # reset because we are manually resetting URL to fresh state
+                )
                 continue
             except RuntimeError as err:
                 if "Session is closed" in str(err):
@@ -559,36 +646,45 @@ class AtherCoordinator:
             except Exception as err:
                 # Check for "Cannot write to closing transport" - treat as transient
                 if "Cannot write to closing transport" in str(err):
-                     _LOGGER.info("Transient transport error (closing transport), reconnecting immediately: %s", err)
-                     
-                     # Increment consecutive failure counter
-                     self._consecutive_failures += 1
-                     if self._consecutive_failures >= 3:
-                         _LOGGER.warning("Too many transient errors (%d). Resetting WebSocket URL to default.", self._consecutive_failures)
-                         self.current_ws_url = WS_URL
-                         self._consecutive_failures = 0
-                         # Backoff a bit more on reset
-                         await asyncio.sleep(2)
-                     else:
-                         await asyncio.sleep(1) # Small delay to avoid tight loop
-                     
-                     continue
+                    _LOGGER.info(
+                        "Transient transport error (closing transport), reconnecting immediately: %s",
+                        err,
+                    )
+
+                    # Increment consecutive failure counter
+                    self._consecutive_failures += 1
+                    if self._consecutive_failures >= 3:
+                        _LOGGER.warning(
+                            "Too many transient errors (%d). Resetting WebSocket URL to default.",
+                            self._consecutive_failures,
+                        )
+                        self.current_ws_url = WS_URL
+                        self._consecutive_failures = 0
+                        # Backoff a bit more on reset
+                        await asyncio.sleep(2)
+                    else:
+                        await asyncio.sleep(1)  # Small delay to avoid tight loop
+
+                    continue
 
                 # If we are redirecting, some aiohttp errors are expected (race condition on close)
                 if self._reconnect_requested:
-                     _LOGGER.info("Ignored expected error during redirect: %s", err)
-                     continue
+                    _LOGGER.info("Ignored expected error during redirect: %s", err)
+                    continue
 
                 _LOGGER.error("Unexpected error in WebSocket loop: %s", err)
                 self.last_update_success = False
                 self._notify_listeners()
-                
+
                 # Increment failure counter for general errors too
                 self._consecutive_failures += 1
                 if self._consecutive_failures >= 3 and self.current_ws_url != WS_URL:
-                     _LOGGER.warning("Repeated failures (%d). Resetting WebSocket URL to default.", self._consecutive_failures)
-                     self.current_ws_url = WS_URL
-                     self._consecutive_failures = 0
+                    _LOGGER.warning(
+                        "Repeated failures (%d). Resetting WebSocket URL to default.",
+                        self._consecutive_failures,
+                    )
+                    self.current_ws_url = WS_URL
+                    self._consecutive_failures = 0
 
                 if not self._shutdown:
                     # Exponential Backoff
@@ -611,10 +707,12 @@ class AtherCoordinator:
             # If we received a message, the connection is at least somewhat functional.
             # Reset counters here to indicate stability.
             if self._consecutive_failures > 0:
-                 if _LOGGER.isEnabledFor(logging.DEBUG):
-                     _LOGGER.debug("Connection stabilized (msg received). Resetting failure counters.")
-                 self._consecutive_failures = 0
-                 self._backoff_delay = 10
+                if _LOGGER.isEnabledFor(logging.DEBUG):
+                    _LOGGER.debug(
+                        "Connection stabilized (msg received). Resetting failure counters."
+                    )
+                self._consecutive_failures = 0
+                self._backoff_delay = 10
 
             msg = json.loads(message)
 
@@ -655,11 +753,14 @@ class AtherCoordinator:
                             # Append namespace (ns) parameter as we are connecting to a generic shard
                             # Namespace is usually the subdomain of the original URL (ather-production-mu)
                             new_url += "&ns=ather-production-mu"
-                            
+
                             if new_session:
                                 # Intentionally ignoring session ID to force fresh session on new shard
                                 # This avoids resuming potentially broken/stale sessions that cause "ghosting".
-                                _LOGGER.info("Dropping Session ID %s from redirect to force fresh session.", new_session)
+                                _LOGGER.info(
+                                    "Dropping Session ID %s from redirect to force fresh session.",
+                                    new_session,
+                                )
 
                             if new_url != self.current_ws_url:
                                 _LOGGER.info(
@@ -668,6 +769,40 @@ class AtherCoordinator:
                                     new_url,
                                 )
                                 self.current_ws_url = new_url
+
+                                # --- Dynamic Base URL Update ---
+                                # Use 'ns' parameter if available to construct the public shard URL.
+                                # Example: s-gke-usc1... -> ns=ather-production-mu
+                                # This is CRITICAL because the internal host (s-gke...) might not be publicly accessible via REST.
+                                parsed_url = urllib.parse.urlparse(new_url)
+                                query_params = urllib.parse.parse_qs(parsed_url.query)
+                                ns_val = query_params.get("ns", [None])[0]
+
+                                if ns_val:
+                                    new_base_url = f"https://{ns_val}.firebaseio.com"
+                                    if self.api.base_url != new_base_url:
+                                        _LOGGER.info(
+                                            "Updating API Base URL from Redirect (using ns): %s",
+                                            new_base_url,
+                                        )
+                                        self.api.base_url = new_base_url
+                                else:
+                                    # Fallback to defensive host stripping if no ns
+                                    clean_host = (
+                                        new_host.replace("ws://", "")
+                                        .replace("wss://", "")
+                                        .replace("http://", "")
+                                        .replace("https://", "")
+                                    )
+                                    new_base_url = f"https://{clean_host}"
+                                    if self.api.base_url != new_base_url:
+                                        _LOGGER.info(
+                                            "Updating API Base URL from Redirect (host fallback): %s",
+                                            new_base_url,
+                                        )
+                                        self.api.base_url = new_base_url
+                                # -------------------------------
+
                                 # Signal reconnection needed
                                 self._reconnect_requested = True
                                 return  # Stop processing this message
@@ -684,19 +819,49 @@ class AtherCoordinator:
                                 _LOGGER.info(
                                     "Ignoring Reset (t:r) for same host: %s (Current: %s)",
                                     new_host,
-                                    self.current_ws_url
+                                    self.current_ws_url,
                                 )
                                 return
 
                             new_url = f"wss://{new_host}/.ws?v=5&ns=ather-production-mu"
-                            
+
                             if new_url != self.current_ws_url:
                                 _LOGGER.info(
                                     "Received Reset/Redirect (t:r): Switching from %s to %s",
                                     self.current_ws_url,
-                                    new_url
+                                    new_url,
                                 )
                                 self.current_ws_url = new_url
+
+                                # --- Dynamic Base URL Update ---
+                                parsed_url = urllib.parse.urlparse(new_url)
+                                query_params = urllib.parse.parse_qs(parsed_url.query)
+                                ns_val = query_params.get("ns", [None])[0]
+
+                                if ns_val:
+                                    new_base_url = f"https://{ns_val}.firebaseio.com"
+                                    if self.api.base_url != new_base_url:
+                                        _LOGGER.info(
+                                            "Updating API Base URL from Reset/Redirect (using ns): %s",
+                                            new_base_url,
+                                        )
+                                        self.api.base_url = new_base_url
+                                else:
+                                    clean_host = (
+                                        new_host.replace("ws://", "")
+                                        .replace("wss://", "")
+                                        .replace("http://", "")
+                                        .replace("https://", "")
+                                    )
+                                    new_base_url = f"https://{clean_host}"
+                                    if self.api.base_url != new_base_url:
+                                        _LOGGER.info(
+                                            "Updating API Base URL from Reset/Redirect (host fallback): %s",
+                                            new_base_url,
+                                        )
+                                        self.api.base_url = new_base_url
+                                # -------------------------------
+
                                 self._reconnect_requested = True
                                 return
 
@@ -805,9 +970,9 @@ class AtherCoordinator:
         if path and path.endswith("/lastSyncedTime"):
             current_val = self.data.get("lastSyncedTime")
             if current_val != data:
-                 self.data["lastSyncedTime"] = data
-                 if _LOGGER.isEnabledFor(logging.DEBUG):
-                     _LOGGER.debug("Updated lastSyncedTime: %s", data)
+                self.data["lastSyncedTime"] = data
+                if _LOGGER.isEnabledFor(logging.DEBUG):
+                    _LOGGER.debug("Updated lastSyncedTime: %s", data)
             return
 
         if not isinstance(data, dict):
@@ -846,12 +1011,14 @@ class AtherCoordinator:
         # Auto-Reenable Shutdown Protection if we receive fresh data
         # This implies the scooter is awake/communicating, so we re-arm the safety lock.
         if not self.shutdown_safe_mode:
-            _LOGGER.info("Fresh data received. Re-enabling Shutdown Protection (Safety Lock).")
+            _LOGGER.info(
+                "Fresh data received. Re-enabling Shutdown Protection (Safety Lock)."
+            )
             self.shutdown_safe_mode = True
 
         # Determine target dictionary based on path
         target_dict = self.data
-        
+
         if path:
             if path.endswith("/bike"):
                 if "bike" not in self.data:
@@ -862,13 +1029,17 @@ class AtherCoordinator:
                     self.data["charging"] = {}
                 target_dict = self.data["charging"]
             elif path.endswith("/tpms"):
-                 if "tpms" not in self.data:
-                     self.data["tpms"] = {}
-                 target_dict = self.data["tpms"]
+                if "tpms" not in self.data:
+                    self.data["tpms"] = {}
+                target_dict = self.data["tpms"]
             elif path.endswith("/app"):
                 if "app" not in self.data:
                     self.data["app"] = {}
                 target_dict = self.data["app"]
+            elif path.endswith("/features"):
+                if "features" not in self.data:
+                    self.data["features"] = {}
+                target_dict = self.data["features"]
 
         # Merge the incoming data
         if _LOGGER.isEnabledFor(logging.DEBUG):
@@ -914,7 +1085,9 @@ class AtherCoordinator:
                 ],
             )
             if "VIN" in bike:
-                self.data["vin"] = bike["VIN"]  # Map uppercase VIN to lowercase vin for sensor
+                self.data["vin"] = bike[
+                    "VIN"
+                ]  # Map uppercase VIN to lowercase vin for sensor
             if "GPSLocation" in bike:
                 self._update_gps(bike["GPSLocation"])
 

@@ -100,7 +100,7 @@ async def async_setup_entry(
 
     # Wait for initial data to ensure feature flags are loaded
     try:
-        await asyncio.wait_for(coordinator.async_wait_for_initial_data(), timeout=10)
+        await asyncio.wait_for(coordinator.async_wait_for_initial_data(), timeout=60)
     except asyncio.TimeoutError:
         _LOGGER.warning(
             "Timed out waiting for initial data. Remote features may not be enabled."

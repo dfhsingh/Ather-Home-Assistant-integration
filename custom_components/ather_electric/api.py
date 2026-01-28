@@ -33,7 +33,9 @@ class AtherAuthError(AtherAPIError):
 class AtherAPI:
     """Class to handle Ather API communications."""
 
-    def __init__(self, session: aiohttp.ClientSession, base_url: str = BASE_URL) -> None:
+    def __init__(
+        self, session: aiohttp.ClientSession, base_url: str = BASE_URL
+    ) -> None:
         """Initialize the API client."""
         self._session = session
         self.base_url = base_url
@@ -164,19 +166,22 @@ class AtherAPI:
         if uid:
             _LOGGER.debug("Decoded User ID from token: %s", uid)
             return uid
-        
+
         # Fallback to API
         profile = await self.get_user_profile(token)
         if profile:
             return str(profile.get("id"))
         return None
 
-    async def get_scooters(self, user_id: str, id_token: str) -> list[str] | None:
+    async def get_scooters(
+        self, user_id: str, id_token: str, override_base_url: str | None = None
+    ) -> list[str] | None:
         """Fetch scooter IDs from Firebase."""
         if self._session.closed:
             return None
-        # Use dynamic base_url
-        url = f"{self.base_url}/users/{user_id}/scooters.json?auth={id_token}"
+        # Use dynamic base_url or override
+        base = override_base_url if override_base_url else self.base_url
+        url = f"{base}/users/{user_id}/scooters.json?auth={id_token}"
         try:
             async with self._session.get(url, timeout=DEFAULT_TIMEOUT) as resp:
                 if resp.status == 200:
@@ -186,7 +191,7 @@ class AtherAPI:
                         return list(data.keys())
                     return []
                 elif resp.status == 401:
-                    raise AtherAuthError(f"Unauthorized accessing scooters at {self.base_url}")
+                    raise AtherAuthError(f"Unauthorized accessing scooters at {base}")
                 _LOGGER.error("Get Scooters failed: %s", await resp.text())
         except AtherAPIError:
             raise
@@ -207,7 +212,9 @@ class AtherAPI:
                 if resp.status == 200:
                     return await resp.json()
                 elif resp.status == 401:
-                    raise AtherAuthError(f"Unauthorized accessing scooter details at {self.base_url}")
+                    raise AtherAuthError(
+                        f"Unauthorized accessing scooter details at {self.base_url}"
+                    )
                 _LOGGER.error(
                     "Error getting scooter details: Status %s, Response: %s",
                     resp.status,
