@@ -19,7 +19,7 @@ To protect the integrity of the community and adhere to security best practices,
 
 If members of the Ather Energy team are reading this:
 
-The community of Ather owners includes many enthusiasts and developers who love your hardware. We believe that **official, documented APIs** (with proper OAuth2 protocols, security tokens, and rate limiting) would significantly enhance the ownership experience.
+The community of Ather owners includes many enthusiasts and developers who love our Ather scooters. We believe that **official, documented APIs** (with proper OAuth2 protocols, security tokens, and rate limiting) would significantly enhance the ownership experience.
 
 Please consider opening your platform to developers so we can help make Ather scooters even more "intelligent" and "awesome."
 
