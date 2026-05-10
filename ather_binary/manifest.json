@@ -1,0 +1,11 @@
+{
+  "domain": "ather_binary",
+  "name": "Ather Electric (Binary)",
+  "codeowners": ["@dfhsingh"],
+  "config_flow": true,
+  "documentation": "https://github.com/dfhsingh/Ather-Home-Assistant-Component",
+  "integration_type": "device",
+  "iot_class": "cloud_polling",
+  "version": "1.0.0",
+  "requirements": []
+}
