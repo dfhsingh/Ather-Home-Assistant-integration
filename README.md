@@ -1,5 +1,3 @@
-# README.md
-
 A custom component for Home Assistant designed for Ather electric scooters, featuring a high-performance binary core and dedicated time series storage.
 
 ---
